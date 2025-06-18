@@ -16,7 +16,7 @@ LOG_CHANNEL_ID = 1384854378820800675      # Where threads and logs go
 
 async def get_or_create_thread(log_channel: discord.TextChannel, message_id: int):
     active_threads = [thread for thread in log_channel.threads if not thread.archived]
-    for thread in active_threads.threads:
+    for thread in active_threads:
         if thread.name == f"Reactions for msg {message_id}":
             return thread
     # Not found — create a new thread in the log channel (no parent message)
