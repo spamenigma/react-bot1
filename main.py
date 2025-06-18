@@ -166,7 +166,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     emoji_obj = payload.emoji
 
     # Match cross emoji by ID to replace with ❌
-    if hasattr(emoji_obj, "id") and emoji_obj.id == YOUR_CROSS_EMOJI_ID:
+    if hasattr(emoji_obj, "id") and emoji_obj.id == 663134181089607727:
         emoji_str = "❌"
     else:
         emoji_str = str(emoji_obj)
@@ -202,7 +202,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
     emoji_obj = payload.emoji
 
-    if hasattr(emoji_obj, "id") and emoji_obj.id == YOUR_CROSS_EMOJI_ID:
+    if hasattr(emoji_obj, "id") and emoji_obj.id == 663134181089607727:
         emoji_str = "❌"
     else:
         emoji_str = str(emoji_obj)
