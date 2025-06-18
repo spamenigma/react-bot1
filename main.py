@@ -2,6 +2,7 @@ import os
 import discord
 from discord.ext import commands
 from datetime import datetime
+from collections import defaultdict
 from keep_alive import keep_alive
 
 intents = discord.Intents.default()
@@ -14,12 +15,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
 LOG_CHANNEL_ID = 1384854378820800675      # Where threads and logs go
 
+# Store sign-ups per emoji per message
+reaction_signups = defaultdict(lambda: defaultdict(set))
+
 async def get_or_create_thread(log_channel: discord.TextChannel, message_id: int):
     active_threads = [thread for thread in log_channel.threads if not thread.archived]
     for thread in active_threads:
         if thread.name == f"Reactions for msg {message_id}":
             return thread
-    # Not found — create a new thread in the log channel (no parent message)
     thread = await log_channel.create_thread(
         name=f"Reactions for msg {message_id}",
         auto_archive_duration=1440
@@ -29,6 +32,18 @@ async def get_or_create_thread(log_channel: discord.TextChannel, message_id: int
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     return f"[{time_str}] {user} {action} reaction {emoji}"
+
+async def post_summary(thread, message_id):
+    table_lines = ["\n📋 **Sign-up Summary**"]
+    emoji_data = reaction_signups[message_id]
+    for emoji, users in emoji_data.items():
+        if users:
+            table_lines.append(f"{emoji} **{len(users)} signed up:**")
+            for user in sorted(users):
+                table_lines.append(f"- {user}")
+            table_lines.append("")
+    if len(table_lines) > 1:
+        await thread.send("\n".join(table_lines))
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -42,8 +57,13 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         return
     thread = await get_or_create_thread(log_channel, message.id)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
-    emoji = payload.emoji
+    emoji = str(payload.emoji)
+
+    # Track reaction
+    reaction_signups[payload.message_id][emoji].add(user.name)
+
     await thread.send(log_line(user, emoji, "added"))
+    await post_summary(thread, payload.message_id)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
@@ -57,16 +77,17 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         return
     thread = await get_or_create_thread(log_channel, message.id)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
-    emoji = payload.emoji
+    emoji = str(payload.emoji)
+
+    # Remove reaction
+    if user.name in reaction_signups[payload.message_id][emoji]:
+        reaction_signups[payload.message_id][emoji].remove(user.name)
+        if not reaction_signups[payload.message_id][emoji]:
+            del reaction_signups[payload.message_id][emoji]
+
     await thread.send(log_line(user, emoji, "removed"))
+    await post_summary(thread, payload.message_id)
 
 if __name__ == "__main__":
     keep_alive()
-    # Debugging environment variable
-    print("Bot token:", os.environ.get("BOT_TOKEN"))
-    
-    import tempfile
-    print("Default temp directory:", tempfile.gettempdir())
-
-    # Start the bot
     bot.run(os.environ["BOT_TOKEN"])
