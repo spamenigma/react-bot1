@@ -12,16 +12,15 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
-LOG_CHANNEL_ID = 1384854378820800675      # Where threads and logs go
+MONITOR_CHANNEL_ID = 1384853874967449640
+LOG_CHANNEL_ID = 1384854378820800675
 
-# Map emoji ID or name to custom labels
+# Maps emoji ID or name to readable label
 EMOJI_LABELS = {
     "⏳": "Late",
     1240593798098749500: "Not attending",  # :cross~1:
 }
 
-# Store sign-ups per emoji per message
 reaction_signups = defaultdict(lambda: defaultdict(set))
 
 
@@ -40,19 +39,21 @@ def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
 
 async def get_or_create_thread(log_channel: discord.TextChannel, message: discord.Message):
     message_id = message.id
-    active_threads = [thread for thread in log_channel.threads if not thread.archived]
-    for thread in active_threads:
-        if thread.name.endswith(f"{message_id}"):
-            return thread
-    title = message.content.splitlines()[0][:80] or f"Reactions for msg {message_id}"
-    thread_name = f"{title} ({message_id})"
+    thread_title = message.content.splitlines()[0][:80] or f"Message {message_id}"
+
+    # Look for existing thread by suffix
+    for thread in log_channel.threads:
+        if not thread.archived and thread.name.endswith(f"({message_id})"):
+            return thread, False
+
+    thread_name = f"{thread_title} ({message_id})"
     thread = await log_channel.create_thread(
         name=thread_name,
         auto_archive_duration=1440
     )
-    # Post message linking to the thread
-    await log_channel.send(f"📌 [Reaction thread for this announcement]({thread.jump_url})")
-    return thread
+    link_msg = f"📌 [Thread for: **{thread_title}**]({thread.jump_url})"
+    await log_channel.send(link_msg)
+    return thread, True
 
 
 async def post_summary(thread: discord.Thread, message_id: int):
@@ -72,6 +73,7 @@ async def post_summary(thread: discord.Thread, message_id: int):
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
+
     guild = bot.get_guild(payload.guild_id)
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
     try:
@@ -79,11 +81,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     except Exception:
         return
 
-    thread = await get_or_create_thread(log_channel, message)
+    thread, _ = await get_or_create_thread(log_channel, message)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
     emoji = payload.emoji
 
-    # Track reaction
     reaction_signups[payload.message_id][emoji].add(user.name)
 
     await thread.send(log_line(user, emoji, "added"))
@@ -94,6 +95,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
+
     guild = bot.get_guild(payload.guild_id)
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
     try:
@@ -101,11 +103,10 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     except Exception:
         return
 
-    thread = await get_or_create_thread(log_channel, message)
+    thread, _ = await get_or_create_thread(log_channel, message)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
     emoji = payload.emoji
 
-    # Remove reaction
     if user.name in reaction_signups[payload.message_id][emoji]:
         reaction_signups[payload.message_id][emoji].remove(user.name)
         if not reaction_signups[payload.message_id][emoji]:
