@@ -13,174 +13,128 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
-LOG_CHANNEL_ID = 1384854378820800675      # Where threads and logs go
+LOG_CHANNEL_ID = 1384854378820800675      # Where logs and summary go
 
+# Signups: message_id -> emoji (as ID or name) -> set of user names
 reaction_signups = defaultdict(lambda: defaultdict(set))
-message_threads = {}
-message_link_sent = set()
-summary_message_ids = {}  # message_id: summary_message_id in log channel
 
-EMOJI_LABELS = {
-    718534017082720339: "Support",
-    1025015433054662676: "CSW signed up",
-    1091115981788684318: "Renegade signed up",
-    1025067188102643853: "Trident signed up",
-    1025067230347661412: "Athena signed up",
-    792085274149519420: "Pathfinder signed up",
-    "🏴‍☠️": "OPFOR signed up",
+# Store thread and summary message references
+reaction_threads = {}     # message_id -> thread
+summary_messages = {}     # message_id -> summary msg
+
+# Emoji role mapping with label, emoji string, and optional color
+EMOJI_ROLES = {
+    718534017082720339: ("Support", "🟧"),
+    1025015433054662676: ("CSW", "<:csw:1025015433054662676>"),
+    1091115981788684318: ("Renegade", "<:renegade:1091115981788684318>"),
+    1025067188102643853: ("Trident", "<:trident:1025067188102643853>"),
+    1025067230347661412: ("Athena", "<:athena:1025067230347661412>"),
+    792085274149519420: ("Pathfinder", "<:pathfinder:792085274149519420>"),
+    "🏴‍☠️": ("OPFOR", "🏴‍☠️"),
+    663134181089607727: ("Not attending", "❌"),
+    "⏳": ("Late", "⏳"),
 }
 
-def format_action_label(emoji_key, count):
-    if emoji_key == "⏳":
-        return f"{count} late"
-    label = EMOJI_LABELS.get(emoji_key, None)
-    if label:
-        return f"{count} {label}"
-    if isinstance(emoji_key, int):
-        return f"{count} emoji id {emoji_key} signed up"
-    return f"{count} {emoji_key} signed up"
+def get_summary_title(original_msg):
+    lines = original_msg.content.splitlines()
+    for line in lines:
+        if line.strip() and not line.strip().startswith("<@"):
+            title = line.strip()
+            break
+    else:
+        title = "Event"
 
-async def get_or_create_thread(log_channel: discord.TextChannel, message: discord.Message):
-    thread = message_threads.get(message.id)
-    if thread and not thread.archived:
-        return thread
+    # Try to extract Discord timestamp (e.g. <t:1234567890:R>)
+    ts_parts = [part for part in lines if "<t:" in part]
+    timestamp = ts_parts[0] if ts_parts else ""
+    return f"Sign-Ups for {title} {timestamp}".strip()
 
-    active_threads = [t for t in log_channel.threads if not t.archived]
+def get_or_create_thread(log_channel: discord.TextChannel, original_msg, message_id: int):
+    existing = [t for t in log_channel.threads if not t.archived and str(message_id) in t.name]
+    if existing:
+        return existing[0]
+    return log_channel.create_thread(name=f"Reactions for msg {message_id}", auto_archive_duration=1440)
 
-    title_lines = [line.strip() for line in message.content.splitlines() if line.strip()]
-    thread_name = None
-    if title_lines:
-        first_line = title_lines[0]
-        if first_line.startswith("<@") or first_line.startswith("@"):
-            for line in title_lines[1:]:
-                if not line.startswith("<@") and not line.startswith("@"):
-                    thread_name = line
-                    break
-            if not thread_name and len(title_lines) > 1:
-                thread_name = title_lines[1]
-        else:
-            thread_name = first_line
-    if not thread_name:
-        thread_name = f"Reactions for msg {message.id}"
-
-    for t in active_threads:
-        if t.name == thread_name:
-            message_threads[message.id] = t
-            return t
-
-    thread = await log_channel.create_thread(
-        name=thread_name,
-        auto_archive_duration=1440,
-    )
-    message_threads[message.id] = thread
-    return thread
-
-def log_line(user: discord.User, emoji, action: str):
+def log_line(user: discord.User, emoji_obj, action: str):
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    emoji_str = str(emoji)
+    emoji_str = emoji_obj.name
+    if hasattr(emoji_obj, "id") and emoji_obj.id:
+        emoji_str = f"<:{emoji_obj.name}:{emoji_obj.id}>"
     return f"[{time_str}] {user} {action} reaction {emoji_str}"
 
-async def post_summary(log_channel, message_id):
-    emoji_data = reaction_signups.get(message_id)
-    if not emoji_data:
-        return
+def get_emoji_key(emoji):
+    return emoji.id if emoji.id else emoji.name
 
-    lines = ["📋 **Sign-up Summary**"]
+async def update_summary(log_channel, original_msg, message_id):
+    emoji_data = reaction_signups[message_id]
+    lines = [f"📋 **{get_summary_title(original_msg)}**"]
     for emoji_key, users in emoji_data.items():
-        if users:
-            count = len(users)
-            line = format_action_label(emoji_key, count)
-            lines.append(line)
-            for user in sorted(users):
-                lines.append(f"- {user}")
-            lines.append("")
+        if not users:
+            continue
+        label, icon = EMOJI_ROLES.get(emoji_key, ("", str(emoji_key)))
+        label_text = f"{len(users)} {label}" if label else f"{icon} {len(users)} signed up"
+        lines.append(f"**{label_text}**")
+        for user in sorted(users):
+            lines.append(f"- {user}")
+        lines.append("")
+    text = "\n".join(lines)
 
-    if len(lines) > 1:
-        # Delete old summary message if exists
-        old_summary_id = summary_message_ids.get(message_id)
-        if old_summary_id:
-            try:
-                old_msg = await log_channel.fetch_message(old_summary_id)
-                await old_msg.delete()
-            except Exception:
-                pass
+    if message_id in summary_messages:
+        try:
+            await summary_messages[message_id].edit(content=text)
+            return
+        except Exception:
+            pass
 
-        msg = await log_channel.send("\n".join(lines))
-        summary_message_ids[message_id] = msg.id
+    summary = await log_channel.send(text)
+    summary_messages[message_id] = summary
 
-async def post_link_message(log_channel, message: discord.Message, thread: discord.Thread):
-    if message.id in message_link_sent:
-        return
-    link = f"https://discord.com/channels/{message.guild.id}/{log_channel.id}/{thread.id}"
-    await log_channel.send(f"🔗 Summary thread for message **{thread.name}**: {link}")
-    message_link_sent.add(message.id)
+    if message_id not in reaction_threads:
+        thread = await get_or_create_thread(log_channel, original_msg, message_id)
+        reaction_threads[message_id] = thread
+        await log_channel.send(f"📌 Thread for **{get_summary_title(original_msg)}** → {thread.jump_url}")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
-
     guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    monitor_channel = guild.get_channel(payload.channel_id)
-    if not log_channel or not monitor_channel:
-        return
-
-    try:
-        message = await monitor_channel.fetch_message(payload.message_id)
-    except Exception:
-        return
-
-    thread = await get_or_create_thread(log_channel, message)
-
+    message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
-
-    emoji_obj = payload.emoji
-    emoji_key = emoji_obj.id if (hasattr(emoji_obj, "id") and emoji_obj.id) else str(emoji_obj)
+    emoji_key = get_emoji_key(payload.emoji)
 
     reaction_signups[payload.message_id][emoji_key].add(user.name)
 
-    await thread.send(log_line(user, emoji_obj, "added"))
-    await post_summary(log_channel, payload.message_id)
-    await post_link_message(log_channel, message, thread)
+    thread = reaction_threads.get(payload.message_id)
+    if not thread:
+        thread = await get_or_create_thread(log_channel, message, payload.message_id)
+        reaction_threads[payload.message_id] = thread
+    await thread.send(log_line(user, payload.emoji, "added"))
+
+    await update_summary(log_channel, message, payload.message_id)
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
-
     guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    monitor_channel = guild.get_channel(payload.channel_id)
-    if not log_channel or not monitor_channel:
-        return
-
-    try:
-        message = await monitor_channel.fetch_message(payload.message_id)
-    except Exception:
-        return
-
-    thread = await get_or_create_thread(log_channel, message)
-
+    message = await guild.get_channel(payload.channel_id).fetch_message(payload.message_id)
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
+    emoji_key = get_emoji_key(payload.emoji)
 
-    emoji_obj = payload.emoji
-    emoji_key = emoji_obj.id if (hasattr(emoji_obj, "id") and emoji_obj.id) else str(emoji_obj)
+    reaction_signups[payload.message_id][emoji_key].discard(user.name)
+    if not reaction_signups[payload.message_id][emoji_key]:
+        del reaction_signups[payload.message_id][emoji_key]
 
-    if user.name in reaction_signups[payload.message_id][emoji_key]:
-        reaction_signups[payload.message_id][emoji_key].remove(user.name)
-        if not reaction_signups[payload.message_id][emoji_key]:
-            del reaction_signups[payload.message_id][emoji_key]
+    thread = reaction_threads.get(payload.message_id)
+    if not thread:
+        thread = await get_or_create_thread(log_channel, message, payload.message_id)
+        reaction_threads[payload.message_id] = thread
+    await thread.send(log_line(user, payload.emoji, "removed"))
 
-    await thread.send(log_line(user, emoji_obj, "removed"))
-    await post_summary(log_channel, payload.message_id)
-    await post_link_message(log_channel, message, thread)
+    await update_summary(log_channel, message, payload.message_id)
 
 if __name__ == "__main__":
     keep_alive()
