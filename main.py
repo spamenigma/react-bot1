@@ -15,7 +15,7 @@ MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
 LOG_CHANNEL_ID = 1384854378820800675      # Where threads and logs go
 
 async def get_or_create_thread(log_channel: discord.TextChannel, message_id: int):
-    active_threads = await log_channel.active_threads()
+    active_threads = [thread for thread in log_channel.threads if not thread.archived]
     for thread in active_threads.threads:
         if thread.name == f"Reactions for msg {message_id}":
             return thread
