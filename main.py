@@ -62,4 +62,8 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 if __name__ == "__main__":
     keep_alive()
+    # Debugging environment variable
+    print("Bot token:", os.environ.get("BOT_TOKEN"))
+
+    # Start the bot
     bot.run(os.environ["BOT_TOKEN"])
