@@ -16,10 +16,7 @@ MONITOR_CHANNEL_ID = 1384853874967449640
 LOG_CHANNEL_ID = 1384854378820800675
 
 reaction_signups = defaultdict(lambda: defaultdict(set))
-
-# Store summary message per monitored message_id
 summary_messages = {}
-# Store thread per summary message id (thread attached to summary message)
 summary_threads = {}
 
 EMOJI_INFO = {
@@ -102,15 +99,12 @@ def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
 async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str):
     if summary_message.id in summary_threads:
         thread = summary_threads[summary_message.id]
-        # Check if thread still exists
         try:
             await thread.fetch()
             return thread, False
         except discord.NotFound:
-            # Thread deleted, remove cache
             del summary_threads[summary_message.id]
 
-    # Create thread attached to summary message
     thread = await summary_message.create_thread(
         name=f"Reactions for {title}",
         auto_archive_duration=1440
@@ -139,10 +133,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
     guild = bot.get_guild(payload.guild_id)
-    if guild is None:
+    if not guild:
         return
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    if log_channel is None:
+    if not log_channel:
         return
     try:
         monitor_channel = guild.get_channel(payload.channel_id)
@@ -166,10 +160,10 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
     guild = bot.get_guild(payload.guild_id)
-    if guild is None:
+    if not guild:
         return
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    if log_channel is None:
+    if not log_channel:
         return
     try:
         monitor_channel = guild.get_channel(payload.channel_id)
@@ -191,6 +185,9 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
     await thread.send(log_line(user, emoji, "removed"))
 
+
 if __name__ == "__main__":
-    keep_alive()
+    # Comment this out if you don't have keep_alive implemented
+    # from keep_alive import keep_alive
+    # keep_alive()
     bot.run(os.environ["BOT_TOKEN"])
