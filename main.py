@@ -65,8 +65,8 @@ if __name__ == "__main__":
     # Debugging environment variable
     print("Bot token:", os.environ.get("BOT_TOKEN"))
     
-import tempfile
-print("Default temp directory:", tempfile.gettempdir())
+    import tempfile
+    print("Default temp directory:", tempfile.gettempdir())
 
     # Start the bot
     bot.run(os.environ["BOT_TOKEN"])
