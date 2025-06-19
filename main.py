@@ -11,7 +11,7 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.commands.Bot(command_prefix="!", intents=intents)
 
 MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
 LOG_CHANNEL_ID = 1384854378820800675      # Where logs & threads go
@@ -36,26 +36,26 @@ EMOJI_MAP = {
 }
 
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")
-PING_RE = re.compile(r"<@!?(\d+)>") # Modified: To find pings anywhere in a string
+# MODIFIED PING_RE to also include channel mentions (<#ID>)
+MENTION_RE = re.compile(r"<[@#]!?(\d+)>") 
 
 def extract_title_and_timestamp(content: str):
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     
-    # Iterate through lines to find the first non-ping line as the title
     title_line_index = 0
     while title_line_index < len(lines):
         current_line = lines[title_line_index]
-        # Check if the line ONLY contains a ping (and possibly some whitespace)
-        if PING_RE.fullmatch(current_line): # Use fullmatch to ensure the whole line is a ping
+        # Check if the line ONLY contains a mention (user, role, or channel)
+        if MENTION_RE.fullmatch(current_line): 
             title_line_index += 1
         else:
             break # Found a suitable title line
 
     title = "Sign-Ups"
     if title_line_index < len(lines):
-        # Remove any pings from the chosen title line
-        title = PING_RE.sub("", lines[title_line_index]).strip()
-        # If after removing pings, the line is empty, default to "Sign-Ups"
+        # Remove any mentions (user, role, channel) from the chosen title line
+        title = MENTION_RE.sub("", lines[title_line_index]).strip()
+        # If after removing mentions, the line is empty, default to "Sign-Ups"
         if not title:
             title = "Sign-Ups"
     
@@ -88,8 +88,8 @@ def build_summary_text(message_id, title, timestamp_str):
         return "📋 No sign-ups yet."
 
     lines = []
-    # Ensure the title itself doesn't contain "@" if it was picked from a ping-inclusive line
-    header = f"📋 **Sign-Ups for: {title.replace('@', '')}**" # Added .replace('@', '') as a fallback
+    # No need for .replace('@', '') now, as MENTION_RE.sub() will handle all types
+    header = f"📋 **Sign-Ups for: {title}**" 
     if timestamp_str:
         header += f"\n**When:** {timestamp_str}"
     lines.append(header)
