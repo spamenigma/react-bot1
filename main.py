@@ -37,7 +37,7 @@ EMOJI_MAP = {
 }
 
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")
-MENTION_RE = re.compile(r"<[@#]!?(\d+)>") 
+MENTION_RE = re.compile(r"<[@#]!?(\d+)>")
 
 def extract_title_and_timestamp(content: str):
     lines = [line.strip() for line in content.splitlines() if line.strip()]
@@ -45,10 +45,10 @@ def extract_title_and_timestamp(content: str):
     title_line_index = 0
     while title_line_index < len(lines):
         current_line = lines[title_line_index]
-        if MENTION_RE.fullmatch(current_line): 
+        if MENTION_RE.fullmatch(current_line):
             title_line_index += 1
         else:
-            break 
+            break
 
     title = "Sign-Ups"
     if title_line_index < len(lines):
@@ -81,7 +81,7 @@ def build_summary_text(message_id, title, timestamp_str):
         return "📋 No sign-ups yet."
 
     lines = []
-    header = f"📋 **Sign-Ups for: {title}**" 
+    header = f"📋 **Sign-Ups for: {title}**"
     if timestamp_str:
         header += f"\n**When:** {timestamp_str}"
     lines.append(header)
@@ -102,7 +102,7 @@ def build_summary_text(message_id, title, timestamp_str):
             
         lines.append(header_line)
         lines.append(f"> {user_mentions}")
-        lines.append("")  
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -161,4 +161,51 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     user = payload.member
     emoji_str = str(payload.emoji)
-    reaction_signups[payload.message_id][emoji
+    # THIS LINE WAS INCOMPLETE IN YOUR ERROR MESSAGE, NOW IT'S FIXED
+    reaction_signups[payload.message_id][emoji_str].add(user.display_name)
+
+    title, timestamp_str = extract_title_and_timestamp(message.content)
+    thread = await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
+
+    try:
+        await thread.send(log_line(user, payload.emoji, "added"))
+    except Exception as e:
+        print(f"Failed to send add log in thread: {e}")
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if payload.channel_id != MONITOR_CHANNEL_ID:
+        return
+    guild = bot.get_guild(payload.guild_id)
+    if not guild: return
+    log_channel = guild.get_channel(LOG_CHANNEL_ID)
+    if not log_channel: return
+    try:
+        monitor_channel = guild.get_channel(payload.channel_id)
+        message = await monitor_channel.fetch_message(payload.message_id)
+    except Exception as e:
+        print(f"Failed to fetch message on reaction remove: {e}")
+        return
+
+    user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
+    if not user or user.bot:
+        return
+
+    emoji_str = str(payload.emoji)
+    
+    if user.display_name in reaction_signups[payload.message_id][emoji_str]:
+        reaction_signups[payload.message_id][emoji_str].remove(user.display_name)
+        if not reaction_signups[payload.message_id][emoji_str]:
+            del reaction_signups[payload.message_id][emoji_str]
+
+    title, timestamp_str = extract_title_and_timestamp(message.content)
+    thread = await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
+
+    try:
+        await thread.send(log_line(user, payload.emoji, "removed"))
+    except Exception as e:
+        print(f"Failed to send remove log in thread: {e}")
+
+if __name__ == "__main__":
+    keep_alive()
+    bot.run(os.environ["BOT_TOKEN"])
