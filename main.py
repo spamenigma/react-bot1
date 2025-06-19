@@ -36,13 +36,29 @@ EMOJI_MAP = {
 }
 
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")
-PING_RE = re.compile(r"^<@!?(\d+)>$")
+PING_RE = re.compile(r"<@!?(\d+)>") # Modified: To find pings anywhere in a string
 
 def extract_title_and_timestamp(content: str):
     lines = [line.strip() for line in content.splitlines() if line.strip()]
-    if lines and PING_RE.match(lines[0]):
-        lines = lines[1:]
-    title = lines[0] if lines else "Sign-Ups"
+    
+    # Iterate through lines to find the first non-ping line as the title
+    title_line_index = 0
+    while title_line_index < len(lines):
+        current_line = lines[title_line_index]
+        # Check if the line ONLY contains a ping (and possibly some whitespace)
+        if PING_RE.fullmatch(current_line): # Use fullmatch to ensure the whole line is a ping
+            title_line_index += 1
+        else:
+            break # Found a suitable title line
+
+    title = "Sign-Ups"
+    if title_line_index < len(lines):
+        # Remove any pings from the chosen title line
+        title = PING_RE.sub("", lines[title_line_index]).strip()
+        # If after removing pings, the line is empty, default to "Sign-Ups"
+        if not title:
+            title = "Sign-Ups"
+    
     timestamp_str = ""
     match = TIMESTAMP_F_RE.search(content)
     if match:
@@ -72,7 +88,8 @@ def build_summary_text(message_id, title, timestamp_str):
         return "📋 No sign-ups yet."
 
     lines = []
-    header = f"📋 **Sign-Ups for: {title}**"
+    # Ensure the title itself doesn't contain "@" if it was picked from a ping-inclusive line
+    header = f"📋 **Sign-Ups for: {title.replace('@', '')}**" # Added .replace('@', '') as a fallback
     if timestamp_str:
         header += f"\n**When:** {timestamp_str}"
     lines.append(header)
