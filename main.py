@@ -11,7 +11,6 @@ intents.message_content = True
 intents.reactions = True
 intents.members = True
 
-# CORRECTED LINE HERE: Removed the extra 'commands.'
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 MONITOR_CHANNEL_ID = 1384853874967449640  # Where reactions happen
@@ -37,7 +36,14 @@ EMOJI_MAP = {
 }
 
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")
-MENTION_RE = re.compile(r"<[@#]!?(\d+)>")
+
+# NEW: Regex to match ANY form of mention/ping (Discord formatted or literal @/#)
+# when checking if an ENTIRE line should be skipped.
+FULL_LINE_MENTION_RE = re.compile(r"^(?:<[@#]!?\d+>|@[a-zA-Z0-9_]+|#[a-zA-Z0-9_]+)\s*$", re.IGNORECASE)
+
+# NEW: Regex to match ONLY Discord's internal mention format for cleaning within a string.
+# This prevents removing literal '@' if it's part of a phrase like "attend @ the park"
+DISCORD_FORMAT_MENTION_RE = re.compile(r"<[@#]!?(\d+)>")
 
 def extract_title_and_timestamp(content: str):
     lines = [line.strip() for line in content.splitlines() if line.strip()]
@@ -45,14 +51,18 @@ def extract_title_and_timestamp(content: str):
     title_line_index = 0
     while title_line_index < len(lines):
         current_line = lines[title_line_index]
-        if MENTION_RE.fullmatch(current_line):
+        # Use FULL_LINE_MENTION_RE to check if the entire line is a mention/ping
+        if FULL_LINE_MENTION_RE.fullmatch(current_line):
             title_line_index += 1
         else:
-            break
+            break # Found a suitable title line
 
-    title = "Sign-Ups"
+    title = "Sign-Ups" # Default title if no suitable line is found
     if title_line_index < len(lines):
-        title = MENTION_RE.sub("", lines[title_line_index]).strip()
+        # Use DISCORD_FORMAT_MENTION_RE to remove only Discord's internal mention formats
+        # from the chosen title line, leaving literal '@' or '#' if they are not part of a mention
+        title = DISCORD_FORMAT_MENTION_RE.sub("", lines[title_line_index]).strip()
+        # If after removing mentions, the line is empty, default to "Sign-Ups"
         if not title:
             title = "Sign-Ups"
     
@@ -81,6 +91,7 @@ def build_summary_text(message_id, title, timestamp_str):
         return "📋 No sign-ups yet."
 
     lines = []
+    # No explicit replace('@', '') needed now as title should already be clean
     header = f"📋 **Sign-Ups for: {title}**"
     if timestamp_str:
         header += f"\n**When:** {timestamp_str}"
@@ -105,6 +116,7 @@ def build_summary_text(message_id, title, timestamp_str):
         lines.append("")
 
     return "\n".join(lines)
+
 
 async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str):
     try:
@@ -161,7 +173,6 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     user = payload.member
     emoji_str = str(payload.emoji)
-    # THIS LINE WAS INCOMPLETE IN YOUR ERROR MESSAGE, NOW IT'S FIXED
     reaction_signups[payload.message_id][emoji_str].add(user.display_name)
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
