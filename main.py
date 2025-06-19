@@ -91,7 +91,7 @@ def build_summary_text(message_id, title, timestamp_str):
             header_line = f"{emoji_key} {count} {label}:"
         else:
             header_line = f"{emoji_key} {count} {label} attending:"
-        
+            
         # Append the header line, then the indented names on a new line
         lines.append(header_line)
         lines.append(f"> {user_mentions}")
@@ -133,11 +133,12 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
 
     thread, created = await get_or_create_thread_for_summary(summary_message, title)
 
-    if created:
-        try:
-            link_msg = await log_channel.send(f"Logging thread created for '{title}' → {thread.mention}")
-        except Exception as e:
-            print(f"Failed to send thread link message: {e}")
+    # REMOVED: The line sending "Logging thread created for..."
+    # if created:
+    #     try:
+    #         link_msg = await log_channel.send(f"Logging thread created for '{title}' → {thread.mention}")
+    #     except Exception as e:
+    #         print(f"Failed to send thread link message: {e}")
 
     return thread
 
