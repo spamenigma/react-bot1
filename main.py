@@ -1105,6 +1105,51 @@ async def list_server_emojis(ctx, search: str = None):
     
     await ctx.send(embed=embed)
 
+@bot.command(name="test_buttons")
+async def test_buttons(ctx):
+    """Test button functionality"""
+    embed = discord.Embed(title="🧪 Button Test", description="Testing button functionality", color=0x00FFFF)
+    
+    # Create test buttons
+    view = discord.ui.View(timeout=None)
+    
+    test_button = discord.ui.Button(
+        label="📊 Test Export",
+        style=discord.ButtonStyle.primary,
+        custom_id="test_export"
+    )
+    
+    refresh_button = discord.ui.Button(
+        label="🔄 Test Refresh", 
+        style=discord.ButtonStyle.secondary,
+        custom_id="test_refresh"
+    )
+    
+    view.add_item(test_button)
+    view.add_item(refresh_button)
+    
+    await ctx.send(embed=embed, view=view)
+    await ctx.send("If you see buttons above, the functionality is working! If not, there may be a Discord.py version issue.")
+
+@bot.command(name="force_refresh_summary")
+async def force_refresh_summary(ctx, message_id: int):
+    """Force refresh a specific summary with buttons"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        # Clear the old summary message reference to force recreation
+        if message_id in summary_messages:
+            del summary_messages[message_id]
+        
+        await post_or_edit_summary_and_get_thread(ctx.channel, message_id, title, timestamp_str)
+        await ctx.send(f"✅ Force refreshed summary for: {title}")
+        await ctx.send("Check if the new summary has buttons below it!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
 @bot.command(name="update_emoji_map")
 async def update_emoji_map(ctx, message_id: int):
     """Generate updated EMOJI_MAP code based on a message's reactions"""
