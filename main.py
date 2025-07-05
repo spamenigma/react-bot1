@@ -1,4 +1,33 @@
-import os
+async def create_summary_view(message_id):
+    """Create the button view for summary messages"""
+    view = discord.ui.View(timeout=None)  # Persistent view
+    
+    # Export button
+    export_button = discord.ui.Button(
+        label="📊 Export Attendance",
+        style=discord.ButtonStyle.primary,
+        custom_id=f"export_{message_id}"
+    )
+    
+    # Refresh button
+    refresh_button = discord.ui.Button(
+        label="🔄 Refresh",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"refresh_{message_id}"
+    )
+    
+    # Thread button (opens the reaction log thread)
+    thread_button = discord.ui.Button(
+        label="🧵 View Logs",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"thread_{message_id}"
+    )
+    
+    view.add_item(export_button)
+    view.add_item(refresh_button)
+    view.add_item(thread_button)
+    
+    return viewimport os
 import discord
 from discord.ext import commands
 from datetime import datetime
@@ -55,7 +84,15 @@ async def on_interaction(interaction: discord.Interaction):
     if not custom_id:
         return
     
-    # Parse the custom_id to get action and message_id
+    # Handle test buttons
+    if custom_id == "test_export":
+        await interaction.response.send_message("✅ Test export button works! The buttons are functioning correctly.", ephemeral=True)
+        return
+    elif custom_id == "test_refresh":
+        await interaction.response.send_message("✅ Test refresh button works! The buttons are functioning correctly.", ephemeral=True)
+        return
+    
+    # Parse the custom_id to get action and message_id for real buttons
     try:
         action, message_id_str = custom_id.split('_', 1)
         message_id = int(message_id_str)
@@ -1104,6 +1141,64 @@ async def list_server_emojis(ctx, search: str = None):
     embed.set_footer(text=f"Total: {len(ctx.guild.emojis)} emojis in server")
     
     await ctx.send(embed=embed)
+
+@bot.command(name="debug_summary_buttons")
+async def debug_summary_buttons(ctx, message_id: int):
+    """Debug why buttons aren't showing on summaries"""
+    try:
+        # Check if we have a summary for this message
+        if message_id in summary_messages:
+            summary_msg = summary_messages[message_id]
+            await ctx.send(f"✅ Found summary message: {summary_msg.jump_url}")
+            
+            # Try to manually add buttons to this summary
+            monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+            original_message = await monitor_channel.fetch_message(message_id)
+            title, timestamp_str = extract_title_and_timestamp(original_message.content)
+            
+            # Build new embed and view
+            summary_embed = build_summary_embed(message_id, title, timestamp_str)
+            view = await create_summary_view(message_id)
+            
+            # Force update with buttons
+            await summary_msg.edit(embed=summary_embed, view=view)
+            await ctx.send(f"🔄 Manually added buttons to summary for: {title}")
+            
+        else:
+            await ctx.send(f"❌ No summary message found for message ID {message_id}")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
+@bot.command(name="add_buttons_to_all")
+async def add_buttons_to_all(ctx):
+    """Add buttons to all existing summary messages"""
+    if not summary_messages:
+        await ctx.send("❌ No summary messages found in memory.")
+        return
+        
+    await ctx.send(f"🔄 Adding buttons to {len(summary_messages)} existing summaries...")
+    
+    updated_count = 0
+    for message_id, summary_msg in summary_messages.items():
+        try:
+            # Get original message details
+            monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+            original_message = await monitor_channel.fetch_message(message_id)
+            title, timestamp_str = extract_title_and_timestamp(original_message.content)
+            
+            # Build new embed and view with buttons
+            summary_embed = build_summary_embed(message_id, title, timestamp_str)
+            view = await create_summary_view(message_id)
+            
+            # Update with buttons
+            await summary_msg.edit(embed=summary_embed, view=view)
+            updated_count += 1
+            
+        except Exception as e:
+            print(f"Failed to update summary for message {message_id}: {e}")
+    
+    await ctx.send(f"✅ Successfully added buttons to {updated_count} summaries!")
 
 @bot.command(name="test_buttons")
 async def test_buttons(ctx):
