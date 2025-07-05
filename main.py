@@ -221,12 +221,35 @@ def build_summary_embed(message_id, title, timestamp_str):
         )
         return embed
     
-    # Calculate unique attendees (excluding "Not attending" and "Late")
+    # Get the message author to exclude from display (but not from thread logs)
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        original_message = None
+        if monitor_channel:
+            try:
+                original_message = monitor_channel.get_message(message_id)
+                if not original_message:
+                    # Try to fetch it
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    original_message = loop.run_until_complete(monitor_channel.fetch_message(message_id))
+            except:
+                pass
+        
+        message_author_name = original_message.author.name if original_message else None
+    except:
+        message_author_name = None
+    
+    # Calculate unique attendees (excluding "Not attending", "Late", and message author)
     unique_attendees = set()
     for emoji_key, users in emoji_data.items():
         label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
         if "Not attending" not in label and "Late" not in label:
-            unique_attendees.update(users)
+            # Exclude message author from count
+            filtered_users = users.copy()
+            if message_author_name and message_author_name in filtered_users:
+                filtered_users.remove(message_author_name)
+            unique_attendees.update(filtered_users)
     
     total_attending = len(unique_attendees)
     
@@ -262,7 +285,12 @@ def build_summary_embed(message_id, title, timestamp_str):
     
     # Add attending reactions first
     for emoji_key, users, label in attending_reactions:
-        count = len(users)
+        # Filter out message author for display
+        filtered_users = users.copy()
+        if message_author_name and message_author_name in filtered_users:
+            filtered_users.remove(message_author_name)
+        
+        count = len(filtered_users)
         
         # Get clean name from EMOJI_MAP or create one
         try:
@@ -283,9 +311,9 @@ def build_summary_embed(message_id, title, timestamp_str):
             field_name = f"{label} ({count})"
             emoji_display = emoji_key
         
-        # Create value with emoji and names
-        if users:
-            user_list = f"{emoji_display}\n" + "\n".join([f"• {user}" for user in sorted(users)])
+        # Create value with emoji and names (no bullets)
+        if filtered_users:
+            user_list = f"{emoji_display}\n" + "\n".join([user for user in sorted(filtered_users)])
         else:
             user_list = f"{emoji_display}\nNone"
         
@@ -301,36 +329,64 @@ def build_summary_embed(message_id, title, timestamp_str):
     
     # Add other reactions (Late, Not attending)
     for emoji_key, users, label in other_reactions:
-        count = len(users)
-        
-        # Get clean name from EMOJI_MAP or create one
-        try:
-            emoji_obj = discord.PartialEmoji.from_str(emoji_key)
-            if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
-                clean_name = EMOJI_MAP[emoji_obj.id][0]
-            elif "Not attending" in label:
-                clean_name = "Not attending"
-            elif "Late" in label:
-                clean_name = "Late"
-            else:
-                clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+        # For "Not attending", don't filter out author and don't show names
+        if "Not attending" in label:
+            count = len(users)
             
-            field_name = f"{clean_name} ({count})"
-            # Try to reconstruct the proper emoji format for display
-            if hasattr(emoji_obj, 'id') and emoji_obj.id:
-                emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
-            else:
-                emoji_display = str(emoji_obj)
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+                if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                    clean_name = EMOJI_MAP[emoji_obj.id][0]
+                else:
+                    clean_name = "Not attending"
+                
+                field_name = f"{clean_name} ({count})"
+                # Try to reconstruct the proper emoji format for display
+                if hasattr(emoji_obj, 'id') and emoji_obj.id:
+                    emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+                else:
+                    emoji_display = "🚫"
+                
+            except:
+                field_name = f"Not attending ({count})"
+                emoji_display = "🚫"
             
-        except:
-            field_name = f"{label} ({count})"
-            emoji_display = emoji_key
-        
-        # Create value with emoji and names
-        if users:
-            user_list = f"{emoji_display}\n" + "\n".join([f"• {user}" for user in sorted(users)])
+            # For not attending, just show emoji and count, no names
+            user_list = f"{emoji_display}\n{count} not attending"
+            
         else:
-            user_list = f"{emoji_display}\nNone"
+            # For Late and other reactions, filter out message author
+            filtered_users = users.copy()
+            if message_author_name and message_author_name in filtered_users:
+                filtered_users.remove(message_author_name)
+            
+            count = len(filtered_users)
+            
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+                if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                    clean_name = EMOJI_MAP[emoji_obj.id][0]
+                elif "Late" in label:
+                    clean_name = "Late"
+                else:
+                    clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+                
+                field_name = f"{clean_name} ({count})"
+                # Try to reconstruct the proper emoji format for display
+                if hasattr(emoji_obj, 'id') and emoji_obj.id:
+                    emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+                else:
+                    emoji_display = str(emoji_obj)
+                
+            except:
+                field_name = f"{label} ({count})"
+                emoji_display = emoji_key
+            
+            # Create value with emoji and names (no bullets)
+            if filtered_users:
+                user_list = f"{emoji_display}\n" + "\n".join([user for user in sorted(filtered_users)])
+            else:
+                user_list = f"{emoji_display}\nNone"
         
         # Discord field value limit is 1024 characters
         if len(user_list) > 1024:
@@ -432,9 +488,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     # Update summary
     await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    # Create thread for logging the reaction change
-    if payload.message_id in summary_messages:
-        summary_message = summary_messages[payload.message_id]
+    # ALWAYS create/get thread for logging - this was the issue!
+    summary_message = summary_messages.get(payload.message_id)
+    if summary_message:
         thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
         
         try:
@@ -473,9 +529,9 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     # Update summary
     await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    # Create thread for logging the reaction change
-    if payload.message_id in summary_messages:
-        summary_message = summary_messages[payload.message_id]
+    # ALWAYS create/get thread for logging
+    summary_message = summary_messages.get(payload.message_id)
+    if summary_message:
         thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
         
         try:
@@ -781,6 +837,137 @@ async def debug_emoji_detection(ctx, message_id: int):
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
+
+@bot.command(name="export_attendance")
+async def export_attendance(ctx, message_id: int):
+    """Export attendance list including not attending users"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        if message_id not in reaction_signups:
+            await ctx.send("❌ No reaction data found for this message.")
+            return
+        
+        emoji_data = reaction_signups[message_id]
+        
+        # Get message author to identify them in export
+        message_author_name = message.author.name
+        
+        # Build export text
+        export_text = f"📊 **ATTENDANCE EXPORT**\n"
+        export_text += f"📋 **Event:** {title}\n"
+        if timestamp_str:
+            export_text += f"⏰ **Time:** {timestamp_str}\n"
+        export_text += f"📅 **Exported:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+        export_text += "=" * 50 + "\n\n"
+        
+        # Track all users and their attendance status
+        all_users = {}
+        attending_reactions = []
+        not_attending_reactions = []
+        late_reactions = []
+        
+        for emoji_key, users in emoji_data.items():
+            if not users:
+                continue
+                
+            label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
+            
+            # Get clean emoji name
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+                if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                    clean_name = EMOJI_MAP[emoji_obj.id][0]
+                elif "Not attending" in label:
+                    clean_name = "Not attending"
+                elif "Late" in label:
+                    clean_name = "Late"
+                else:
+                    clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+            except:
+                clean_name = label
+            
+            if "Not attending" in label:
+                not_attending_reactions.append((clean_name, users))
+            elif "Late" in label:
+                late_reactions.append((clean_name, users))
+            else:
+                attending_reactions.append((clean_name, users))
+            
+            # Track each user's status
+            for user in users:
+                if user not in all_users:
+                    all_users[user] = []
+                all_users[user].append(clean_name)
+        
+        # Calculate totals
+        unique_attending = set()
+        for _, users in attending_reactions:
+            unique_attending.update(users)
+        
+        # Remove message author from attending count
+        if message_author_name in unique_attending:
+            unique_attending.remove(message_author_name)
+        
+        total_attending = len(unique_attending)
+        total_not_attending = sum(len(users) for _, users in not_attending_reactions)
+        total_late = sum(len(users) for _, users in late_reactions)
+        
+        export_text += f"📈 **SUMMARY**\n"
+        export_text += f"✅ Attending: {total_attending}\n"
+        export_text += f"⏳ Late: {total_late}\n"
+        export_text += f"❌ Not Attending: {total_not_attending}\n"
+        export_text += f"👤 Event Creator: {message_author_name} (excluded from attending count)\n\n"
+        
+        # List attending users
+        if attending_reactions:
+            export_text += "✅ **ATTENDING**\n"
+            for reaction_name, users in attending_reactions:
+                # Filter out message author
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        # List late users
+        if late_reactions:
+            export_text += "⏳ **LATE**\n"
+            for reaction_name, users in late_reactions:
+                # Filter out message author
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        # List not attending users
+        if not_attending_reactions:
+            export_text += "❌ **NOT ATTENDING**\n"
+            for reaction_name, users in not_attending_reactions:
+                # Don't filter message author for not attending
+                if users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(users))}\n"
+            export_text += "\n"
+        
+        # If export is too long, send as file
+        if len(export_text) > 1900:
+            # Create a text file
+            import io
+            file_content = export_text
+            file_name = f"attendance_{title.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+            
+            file_buffer = io.StringIO(file_content)
+            file_buffer.seek(0)
+            
+            discord_file = discord.File(fp=io.BytesIO(file_content.encode('utf-8')), filename=file_name)
+            await ctx.send("📊 **Attendance export (file too large for message):**", file=discord_file)
+        else:
+            # Send as message
+            await ctx.send(f"```\n{export_text}\n```")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error exporting attendance: {e}")
 
 @bot.command(name="test_status")
 async def test_status(ctx):
