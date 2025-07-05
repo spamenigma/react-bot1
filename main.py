@@ -90,7 +90,7 @@ def extract_title_and_timestamp(content: str):
 
 def emoji_display_and_label(emoji_obj):
     # Match by ID first if possible
-    if hasattr(emoji_obj, "id") and emoji_obj.id in EMOJI_MAP:
+    if hasattr(emoji_obj, "id") and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
         label, color = EMOJI_MAP[emoji_obj.id]
         return label, color
     # Fall back to unicode or name string
@@ -98,8 +98,13 @@ def emoji_display_and_label(emoji_obj):
     # Special case Late and Not attending emojis by name if needed here
     if name == "⏳":
         return "⏳ Late", None
-    if name == "❌" or name == ":cross~1:":
+    if name == "❌" or name == ":cross~1:" or "cross" in name.lower():
         return "🚫 Not attending", None
+    # For custom emojis, try to display them properly
+    if hasattr(emoji_obj, 'name') and hasattr(emoji_obj, 'id') and emoji_obj.id:
+        # Custom emoji - use the emoji itself as display
+        emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+        return f"{emoji_display} {emoji_obj.name.title()}", None
     # Default label is emoji itself, no color
     return name, None
 
@@ -220,6 +225,13 @@ async def get_or_create_thread_for_summary(summary_message: discord.Message, tit
         auto_archive_duration=1440
     )
     summary_threads[summary_message.id] = thread
+    
+    # Send an initial message in the thread
+    try:
+        await thread.send(f"🧵 **Reaction log for: {title}**\nAll reaction changes will be logged here.")
+    except Exception as e:
+        print(f"Failed to send initial thread message: {e}")
+    
     return thread, True
 
 async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, timestamp_str):
@@ -252,7 +264,14 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
 
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    return f"[{time_str}] {user} {action} reaction {emoji}"
+    # Handle custom emoji display properly
+    if hasattr(emoji, 'id') and emoji.id:
+        # Custom emoji - use proper format
+        emoji_display = f"<:{emoji.name}:{emoji.id}>"
+    else:
+        # Unicode emoji
+        emoji_display = str(emoji)
+    return f"[{time_str}] {user.display_name} {action} reaction {emoji_display}"
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -316,6 +335,70 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         await thread.send(log_line(user, payload.emoji, "removed"))
     except Exception as e:
         print(f"Failed to send remove log in thread: {e}")
+
+@bot.command(name="debug_reactions")
+async def debug_reactions(ctx, message_id: int):
+    """Debug command to see current reaction data for a message"""
+    if message_id in reaction_signups:
+        embed = discord.Embed(title=f"Debug: Reaction Data for {message_id}", color=0x00FFFF)
+        for emoji_key, users in reaction_signups[message_id].items():
+            embed.add_field(
+                name=f"Emoji: {emoji_key}",
+                value=f"Users: {', '.join(users) if users else 'None'}",
+                inline=False
+            )
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"No reaction data found for message {message_id}")
+
+@bot.command(name="refresh_summary")
+async def refresh_summary(ctx, message_id: int):
+    """Manually refresh a summary for a specific message"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        await post_or_edit_summary_and_get_thread(ctx.channel, message_id, title, timestamp_str)
+        await ctx.send(f"✅ Refreshed summary for: {title}")
+    except Exception as e:
+        await ctx.send(f"❌ Error refreshing summary: {e}")
+
+@bot.command(name="show_current_reactions")
+async def show_current_reactions(ctx, message_id: int):
+    """Show what reactions Discord sees on a message"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        
+        embed = discord.Embed(title=f"Current Reactions on Message {message_id}", color=0xFFFF00)
+        
+        if message.reactions:
+            for reaction in message.reactions:
+                users = []
+                async for user in reaction.users():
+                    if not user.bot:  # Skip bot reactions
+                        users.append(user.display_name)
+                
+                emoji_info = f"Emoji: {reaction.emoji}"
+                if hasattr(reaction.emoji, 'id') and reaction.emoji.id:
+                    emoji_info += f" (ID: {reaction.emoji.id})"
+                
+                embed.add_field(
+                    name=emoji_info,
+                    value=f"Count: {reaction.count}\nUsers: {', '.join(users) if users else 'None'}",
+                    inline=False
+                )
+        else:
+            embed.description = "No reactions found on this message."
+        
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     keep_alive()
