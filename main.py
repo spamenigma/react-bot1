@@ -25,14 +25,15 @@ summary_threads = {}
 
 # Emoji ID mappings for wording and emoji display
 EMOJI_MAP = {
-    718534017082720339: ("🧡 Support", 0xFFA500),               # Support orange
-    1025015433054662676: ("💙 CSW", 0xADD8E6),                 # CSW light blue
-    1091115981788684318: ("💚 Renegade", 0x00FF00),
-    1025067188102643853: ("💙 Trident", 0x0000FF),             # Trident blue
-    1025067230347661412: ("💜 Athena", 0x800080),
-    792085274149519420: ("🏹 Pathfinder", None),               # Use emoji, no color
-    663134181089607727: ("🚫 Not attending", None),            # Cross emoji ID
-    123456789012345678: ("⏳ Late", None),                      # Placeholder Late emoji ID
+    1025015433054662676: (":Carrier_Star_Wing: Carrier_Star_Wing", None),
+    718534017082720339: (":1_: 1_", None),
+    663133357592412181: (":greentick: Greentick", None),
+    1025067230347661412: (":Athena_Training_SQN: Athena_Training_Sqn", None),
+    663134181089607727: (":cross: Cross", None),
+    792085274149519420: (":pathfinders: Pathfinders", None),
+    1025067188102643853: (":Trident: Trident", None),
+    1091115981788684318: (":RenegadeLogov2: Renegadelogov2", None),
+    # Unicode: "⏳": ("⏳ Late", None),
 }
 
 LATE_EMOJI_IDS = {123456789012345678}  # Replace with actual Late emoji IDs
