@@ -70,12 +70,18 @@ async def sync_recent_reactions(limit=10):
             print("Log channel not found!")
             return
         
-        # Clear existing data
-        reaction_signups.clear()
-        summary_messages.clear()
-        summary_threads.clear()
+        # DON'T clear existing data - check what already exists
+        # Find existing summary messages first
+        existing_summaries = {}
+        async for log_message in log_channel.history(limit=50):
+            if log_message.author == bot.user and log_message.embeds:
+                embed = log_message.embeds[0]
+                # Try to extract message ID from embed or find a way to link it
+                # For now, we'll store by embed title to avoid duplicates
+                if embed.title and embed.title.startswith("📋"):
+                    existing_summaries[embed.title] = log_message
         
-        # Get recent messages
+        # Get recent messages from monitor channel
         messages = []
         async for message in monitor_channel.history(limit=limit):
             if message.reactions:  # Only process messages with reactions
@@ -86,6 +92,10 @@ async def sync_recent_reactions(limit=10):
         # Process each message's reactions
         for message in messages:
             print(f"Processing message {message.id}...")
+            
+            # Clear data for this specific message only
+            if message.id in reaction_signups:
+                reaction_signups[message.id].clear()
             
             for reaction in message.reactions:
                 emoji_str = str(reaction.emoji)
@@ -99,17 +109,26 @@ async def sync_recent_reactions(limit=10):
         print("Reaction sync completed!")
         
         # Create/update summaries for all synced messages
-        await create_summaries_for_synced_messages(messages, log_channel)
+        await create_summaries_for_synced_messages(messages, log_channel, existing_summaries)
         
     except Exception as e:
         print(f"Error during reaction sync: {e}")
 
-async def create_summaries_for_synced_messages(messages, log_channel):
+async def create_summaries_for_synced_messages(messages, log_channel, existing_summaries):
     """Create or update summary messages for all synced messages"""
     try:
         for message in messages:
             if message.id in reaction_signups:
                 title, timestamp_str = extract_title_and_timestamp(message.content)
+                embed_title = f"📋 {title}"
+                
+                # Check if we already have a summary for this title
+                if embed_title in existing_summaries:
+                    # Update existing summary
+                    existing_message = existing_summaries[embed_title]
+                    summary_messages[message.id] = existing_message
+                    print(f"Found existing summary for: {title}")
+                
                 await post_or_edit_summary_and_get_thread(log_channel, message.id, title, timestamp_str)
                 print(f"Created/updated summary for: {title}")
     
@@ -253,9 +272,12 @@ def build_summary_embed(message_id, title, timestamp_str):
             else:
                 clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
             
-            # Put emoji in the value instead of field name
             field_name = f"{clean_name} ({count})"
-            emoji_display = f"{emoji_obj}" if emoji_obj else emoji_key
+            # Try to reconstruct the proper emoji format for display
+            if hasattr(emoji_obj, 'id') and emoji_obj.id:
+                emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+            else:
+                emoji_display = str(emoji_obj)
             
         except:
             field_name = f"{label} ({count})"
@@ -294,7 +316,11 @@ def build_summary_embed(message_id, title, timestamp_str):
                 clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
             
             field_name = f"{clean_name} ({count})"
-            emoji_display = f"{emoji_obj}" if emoji_obj else emoji_key
+            # Try to reconstruct the proper emoji format for display
+            if hasattr(emoji_obj, 'id') and emoji_obj.id:
+                emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+            else:
+                emoji_display = str(emoji_obj)
             
         except:
             field_name = f"{label} ({count})"
@@ -403,10 +429,10 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     reaction_signups[payload.message_id][emoji_str].add(user.name)
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
-    # Update summary but don't get thread yet
+    # Update summary
     await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    # Now get/create thread only for logging the reaction change
+    # Create thread for logging the reaction change
     if payload.message_id in summary_messages:
         summary_message = summary_messages[payload.message_id]
         thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
@@ -415,6 +441,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             await thread.send(log_line(user, payload.emoji, "added"))
         except Exception as e:
             print(f"Failed to send add log in thread: {e}")
+    else:
+        print(f"Warning: No summary message found for {payload.message_id}")
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
@@ -442,10 +470,10 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             del reaction_signups[payload.message_id][emoji_str]
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
-    # Update summary but don't get thread yet
+    # Update summary
     await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    # Now get/create thread only for logging the reaction change
+    # Create thread for logging the reaction change
     if payload.message_id in summary_messages:
         summary_message = summary_messages[payload.message_id]
         thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
@@ -454,6 +482,8 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             await thread.send(log_line(user, payload.emoji, "removed"))
         except Exception as e:
             print(f"Failed to send remove log in thread: {e}")
+    else:
+        print(f"Warning: No summary message found for {payload.message_id}")
 
 @bot.command(name="sync_reactions")
 async def manual_sync_reactions(ctx, limit: int = 10):
