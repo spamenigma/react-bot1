@@ -490,6 +490,288 @@ async def show_emoji_map(ctx):
     
     await ctx.send(embed=embed)
 
+@bot.command(name="debug_reactions")
+async def debug_reactions(ctx, message_id: int):
+    """Debug command to see current reaction data for a message"""
+    if message_id in reaction_signups:
+        embed = discord.Embed(title=f"Debug: Reaction Data for {message_id}", color=0x00FFFF)
+        for emoji_key, users in reaction_signups[message_id].items():
+            embed.add_field(
+                name=f"Emoji: {emoji_key}",
+                value=f"Users: {', '.join(users) if users else 'None'}",
+                inline=False
+            )
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"No reaction data found for message {message_id}")
+
+@bot.command(name="refresh_summary")
+async def refresh_summary(ctx, message_id: int):
+    """Manually refresh a summary for a specific message"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        await post_or_edit_summary(ctx.channel, message_id, title, timestamp_str)
+        await ctx.send(f"✅ Refreshed summary for: {title}")
+    except Exception as e:
+        await ctx.send(f"❌ Error refreshing summary: {e}")
+
+@bot.command(name="clear_all_logs")
+async def clear_all_logs(ctx, confirm: str = None):
+    """Delete all messages in the log channel (for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "CONFIRM":
+        await ctx.send("⚠️ **WARNING**: This will delete ALL messages in this channel!\n"
+                      "To confirm, use: `!clear_all_logs CONFIRM`")
+        return
+    
+    try:
+        await ctx.send("🗑️ Starting to clear all logs...")
+        
+        # Clear bot's cache first
+        summary_messages.clear()
+        
+        deleted_count = 0
+        
+        # Delete messages in batches (Discord has limits)
+        async for message in ctx.channel.history(limit=None):
+            try:
+                await message.delete()
+                deleted_count += 1
+                
+                # Add small delay to avoid rate limits
+                if deleted_count % 10 == 0:
+                    await ctx.send(f"Deleted {deleted_count} messages...", delete_after=3)
+                    
+            except discord.NotFound:
+                # Message already deleted
+                pass
+            except discord.Forbidden:
+                await ctx.send(f"❌ Permission denied deleting message {message.id}")
+                break
+            except Exception as e:
+                print(f"Error deleting message: {e}")
+        
+        # Send final confirmation (this will be the only message left)
+        await ctx.send(f"✅ Cleared {deleted_count} messages from log channel!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error clearing logs: {e}")
+
+@bot.command(name="clear_all_threads")
+async def clear_all_threads(ctx, confirm: str = None):
+    """Delete all threads in the log channel (for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "CONFIRM":
+        await ctx.send("⚠️ **WARNING**: This will delete ALL threads in this channel!\n"
+                      "To confirm, use: `!clear_all_threads CONFIRM`")
+        return
+    
+    try:
+        await ctx.send("🧵 Starting to clear all threads...")
+        
+        # Clear bot's cache first
+        summary_threads.clear()
+        
+        deleted_count = 0
+        
+        # Get all threads (active and archived)
+        active_threads = ctx.channel.threads
+        
+        # Also get archived threads
+        archived_threads = []
+        async for thread in ctx.channel.archived_threads(limit=None):
+            archived_threads.append(thread)
+        
+        all_threads = active_threads + archived_threads
+        
+        for thread in all_threads:
+            try:
+                await thread.delete()
+                deleted_count += 1
+                print(f"Deleted thread: {thread.name}")
+                
+            except discord.NotFound:
+                # Thread already deleted
+                pass
+            except discord.Forbidden:
+                await ctx.send(f"❌ Permission denied deleting thread {thread.name}")
+            except Exception as e:
+                print(f"Error deleting thread {thread.name}: {e}")
+        
+        await ctx.send(f"✅ Cleared {deleted_count} threads from log channel!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error clearing threads: {e}")
+
+@bot.command(name="clear_all_data")
+async def clear_all_data(ctx, confirm: str = None):
+    """Clear all bot data, logs, and threads (nuclear option for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "NUCLEAR":
+        await ctx.send("⚠️ **NUCLEAR WARNING**: This will:\n"
+                      "• Delete ALL messages in this channel\n"
+                      "• Delete ALL threads in this channel\n"
+                      "• Clear ALL bot reaction data\n"
+                      "To confirm, use: `!clear_all_data NUCLEAR`")
+        return
+    
+    try:
+        await ctx.send("💥 NUCLEAR CLEANUP INITIATED...")
+        
+        # Clear all bot data
+        reaction_signups.clear()
+        summary_messages.clear()
+        summary_threads.clear()
+        
+        # Clear threads first
+        await clear_all_threads(ctx, "CONFIRM")
+        
+        # Then clear messages
+        await clear_all_logs(ctx, "CONFIRM")
+        
+        # Final message
+        await ctx.send("💥 **NUCLEAR CLEANUP COMPLETE!**\n"
+                      "All data, logs, and threads have been cleared.\n"
+                      "Ready for fresh testing!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error during nuclear cleanup: {e}")
+
+@bot.command(name="export_attendance")
+async def export_attendance(ctx, message_id: int):
+    """Export attendance list including not attending users"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        if message_id not in reaction_signups:
+            await ctx.send("❌ No reaction data found for this message.")
+            return
+        
+        emoji_data = reaction_signups[message_id]
+        message_author_name = message.author.name
+        
+        # Build export text
+        export_text = f"📊 **ATTENDANCE EXPORT**\n"
+        export_text += f"📋 **Event:** {title}\n"
+        if timestamp_str:
+            export_text += f"⏰ **Time:** {timestamp_str}\n"
+        export_text += f"📅 **Exported:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+        export_text += "=" * 50 + "\n\n"
+        
+        # Track all users and their attendance status
+        attending_reactions = []
+        not_attending_reactions = []
+        late_reactions = []
+        
+        for emoji_key, users in emoji_data.items():
+            if not users:
+                continue
+                
+            label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
+            
+            # Get clean emoji name
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+                if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                    clean_name = EMOJI_MAP[emoji_obj.id][0]
+                elif "Not attending" in label:
+                    clean_name = "Not attending"
+                elif "Late" in label:
+                    clean_name = "Late"
+                else:
+                    clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+            except:
+                clean_name = label
+            
+            if "Not attending" in label:
+                not_attending_reactions.append((clean_name, users))
+            elif "Late" in label:
+                late_reactions.append((clean_name, users))
+            else:
+                attending_reactions.append((clean_name, users))
+        
+        # Calculate totals
+        unique_attending = set()
+        for _, users in attending_reactions:
+            unique_attending.update(users)
+        
+        # Remove message author from attending count
+        if message_author_name in unique_attending:
+            unique_attending.remove(message_author_name)
+        
+        total_attending = len(unique_attending)
+        total_not_attending = sum(len(users) for _, users in not_attending_reactions)
+        total_late = sum(len(users) for _, users in late_reactions)
+        
+        export_text += f"📈 **SUMMARY**\n"
+        export_text += f"✅ Attending: {total_attending}\n"
+        export_text += f"⏳ Late: {total_late}\n"
+        export_text += f"❌ Not Attending: {total_not_attending}\n"
+        export_text += f"👤 Event Creator: {message_author_name} (excluded from attending count)\n\n"
+        
+        # List attending users
+        if attending_reactions:
+            export_text += "✅ **ATTENDING**\n"
+            for reaction_name, users in attending_reactions:
+                # Filter out message author
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        # List late users
+        if late_reactions:
+            export_text += "⏳ **LATE**\n"
+            for reaction_name, users in late_reactions:
+                # Filter out message author
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        # List not attending users
+        if not_attending_reactions:
+            export_text += "❌ **NOT ATTENDING**\n"
+            for reaction_name, users in not_attending_reactions:
+                # Don't filter message author for not attending
+                if users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(users))}\n"
+            export_text += "\n"
+        
+        # If export is too long, send as file
+        if len(export_text) > 1900:
+            # Create a text file
+            import io
+            file_content = export_text
+            file_name = f"attendance_{title.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+            
+            discord_file = discord.File(fp=io.BytesIO(file_content.encode('utf-8')), filename=file_name)
+            await ctx.send("📊 **Attendance export (file too large for message):**", file=discord_file)
+        else:
+            # Send as message
+            await ctx.send(f"```\n{export_text}\n```")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Error exporting attendance: {e}")
+
 if __name__ == "__main__":
     keep_alive()
     bot.run(os.environ["BOT_TOKEN"])
