@@ -37,7 +37,7 @@ EMOJI_MAP = {
 }
 
 LATE_EMOJI_IDS = {123456789012345678}  # Replace with actual Late emoji IDs
-NOT_ATTENDING_IDS = {663134181089607727}  # Replace with actual cross emoji IDs
+NOT_ATTENDING_IDS = {663134181089607727}  # Cross emoji
 
 # Updated regex patterns
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")  # Match Discord :F timestamps
@@ -324,14 +324,7 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
 
     thread, created = await get_or_create_thread_for_summary(summary_message, title)
 
-    # If just created, post a link message in logs channel
-    if created:
-        try:
-            link_msg = await log_channel.send(f"Created thread for {title} → {thread.mention}")
-            # Optionally store or pin link_msg if needed
-        except Exception as e:
-            print(f"Failed to send thread link message: {e}")
-
+    # Thread is created but no link message is posted
     return thread
 
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
@@ -531,6 +524,171 @@ async def get_emoji_map(ctx, message_id: int):
         
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
+
+@bot.command(name="clear_all_logs")
+async def clear_all_logs(ctx, confirm: str = None):
+    """Delete all messages in the log channel (for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "CONFIRM":
+        await ctx.send("⚠️ **WARNING**: This will delete ALL messages in this channel!\n"
+                      "To confirm, use: `!clear_all_logs CONFIRM`")
+        return
+    
+    try:
+        await ctx.send("🗑️ Starting to clear all logs...")
+        
+        # Clear bot's cache first
+        summary_messages.clear()
+        
+        deleted_count = 0
+        
+        # Delete messages in batches (Discord has limits)
+        async for message in ctx.channel.history(limit=None):
+            try:
+                await message.delete()
+                deleted_count += 1
+                
+                # Add small delay to avoid rate limits
+                if deleted_count % 10 == 0:
+                    await ctx.send(f"Deleted {deleted_count} messages...", delete_after=3)
+                    
+            except discord.NotFound:
+                # Message already deleted
+                pass
+            except discord.Forbidden:
+                await ctx.send(f"❌ Permission denied deleting message {message.id}")
+                break
+            except Exception as e:
+                print(f"Error deleting message: {e}")
+        
+        # Send final confirmation (this will be the only message left)
+        await ctx.send(f"✅ Cleared {deleted_count} messages from log channel!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error clearing logs: {e}")
+
+@bot.command(name="clear_all_threads")
+async def clear_all_threads(ctx, confirm: str = None):
+    """Delete all threads in the log channel (for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "CONFIRM":
+        await ctx.send("⚠️ **WARNING**: This will delete ALL threads in this channel!\n"
+                      "To confirm, use: `!clear_all_threads CONFIRM`")
+        return
+    
+    try:
+        await ctx.send("🧵 Starting to clear all threads...")
+        
+        # Clear bot's cache first
+        summary_threads.clear()
+        
+        deleted_count = 0
+        
+        # Get all threads (active and archived)
+        active_threads = ctx.channel.threads
+        
+        # Also get archived threads
+        archived_threads = []
+        async for thread in ctx.channel.archived_threads(limit=None):
+            archived_threads.append(thread)
+        
+        all_threads = active_threads + archived_threads
+        
+        for thread in all_threads:
+            try:
+                await thread.delete()
+                deleted_count += 1
+                print(f"Deleted thread: {thread.name}")
+                
+            except discord.NotFound:
+                # Thread already deleted
+                pass
+            except discord.Forbidden:
+                await ctx.send(f"❌ Permission denied deleting thread {thread.name}")
+            except Exception as e:
+                print(f"Error deleting thread {thread.name}: {e}")
+        
+        await ctx.send(f"✅ Cleared {deleted_count} threads from log channel!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error clearing threads: {e}")
+
+@bot.command(name="clear_all_data")
+async def clear_all_data(ctx, confirm: str = None):
+    """Clear all bot data, logs, and threads (nuclear option for testing)"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    if confirm != "NUCLEAR":
+        await ctx.send("⚠️ **NUCLEAR WARNING**: This will:\n"
+                      "• Delete ALL messages in this channel\n"
+                      "• Delete ALL threads in this channel\n"
+                      "• Clear ALL bot reaction data\n"
+                      "To confirm, use: `!clear_all_data NUCLEAR`")
+        return
+    
+    try:
+        await ctx.send("💥 NUCLEAR CLEANUP INITIATED...")
+        
+        # Clear all bot data
+        reaction_signups.clear()
+        summary_messages.clear()
+        summary_threads.clear()
+        
+        # Clear threads first
+        await clear_all_threads(ctx, "CONFIRM")
+        
+        # Then clear messages
+        await clear_all_logs(ctx, "CONFIRM")
+        
+        # Final message
+        await ctx.send("💥 **NUCLEAR CLEANUP COMPLETE!**\n"
+                      "All data, logs, and threads have been cleared.\n"
+                      "Ready for fresh testing!")
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error during nuclear cleanup: {e}")
+
+@bot.command(name="test_status")
+async def test_status(ctx):
+    """Show current bot status for testing"""
+    embed = discord.Embed(title="🧪 Bot Test Status", color=0x00FFFF)
+    
+    # Reaction data
+    total_messages = len(reaction_signups)
+    total_reactions = sum(len(emojis) for emojis in reaction_signups.values())
+    
+    embed.add_field(
+        name="📊 Data Status",
+        value=f"Tracking {total_messages} messages\n"
+              f"With {total_reactions} different reactions",
+        inline=False
+    )
+    
+    # Summary messages
+    embed.add_field(
+        name="📋 Summary Status",
+        value=f"Active summaries: {len(summary_messages)}\n"
+              f"Active threads: {len(summary_threads)}",
+        inline=False
+    )
+    
+    # Channel info
+    embed.add_field(
+        name="🎯 Channel Config",
+        value=f"Monitor: <#{MONITOR_CHANNEL_ID}>\n"
+              f"Logs: <#{LOG_CHANNEL_ID}>",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
 
 if __name__ == "__main__":
     keep_alive()
