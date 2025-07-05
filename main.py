@@ -46,6 +46,178 @@ ROLE_MENTION_RE = re.compile(r"^<@&(\d+)>$")  # Match role mentions
 MIXED_MENTIONS_RE = re.compile(r"^(<@[!&]?\d+>\s*)+$")  # Match lines with only mentions
 
 @bot.event
+async def on_interaction(interaction: discord.Interaction):
+    """Handle button clicks"""
+    if not interaction.data or interaction.type != discord.InteractionType.component:
+        return
+    
+    custom_id = interaction.data.get('custom_id')
+    if not custom_id:
+        return
+    
+    # Parse the custom_id to get action and message_id
+    try:
+        action, message_id_str = custom_id.split('_', 1)
+        message_id = int(message_id_str)
+    except (ValueError, AttributeError):
+        await interaction.response.send_message("❌ Invalid button action.", ephemeral=True)
+        return
+    
+    # Handle different button actions
+    if action == "export":
+        await handle_export_button(interaction, message_id)
+    elif action == "refresh":
+        await handle_refresh_button(interaction, message_id)
+    elif action == "thread":
+        await handle_thread_button(interaction, message_id)
+    else:
+        await interaction.response.send_message("❌ Unknown button action.", ephemeral=True)
+
+async def handle_export_button(interaction: discord.Interaction, message_id: int):
+    """Handle export button click"""
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        if message_id not in reaction_signups:
+            await interaction.followup.send("❌ No reaction data found for this message.", ephemeral=True)
+            return
+        
+        emoji_data = reaction_signups[message_id]
+        message_author_name = message.author.name
+        
+        # Build export text (same logic as export_attendance command)
+        export_text = f"📊 **ATTENDANCE EXPORT**\n"
+        export_text += f"📋 **Event:** {title}\n"
+        if timestamp_str:
+            export_text += f"⏰ **Time:** {timestamp_str}\n"
+        export_text += f"📅 **Exported:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+        export_text += "=" * 50 + "\n\n"
+        
+        # Process reactions (same logic as before)
+        attending_reactions = []
+        not_attending_reactions = []
+        late_reactions = []
+        
+        for emoji_key, users in emoji_data.items():
+            if not users:
+                continue
+                
+            label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
+            
+            try:
+                emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+                if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                    clean_name = EMOJI_MAP[emoji_obj.id][0]
+                elif "Not attending" in label:
+                    clean_name = "Not attending"
+                elif "Late" in label:
+                    clean_name = "Late"
+                else:
+                    clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+            except:
+                clean_name = label
+            
+            if "Not attending" in label:
+                not_attending_reactions.append((clean_name, users))
+            elif "Late" in label:
+                late_reactions.append((clean_name, users))
+            else:
+                attending_reactions.append((clean_name, users))
+        
+        # Calculate totals
+        unique_attending = set()
+        for _, users in attending_reactions:
+            unique_attending.update(users)
+        
+        if message_author_name in unique_attending:
+            unique_attending.remove(message_author_name)
+        
+        total_attending = len(unique_attending)
+        total_not_attending = sum(len(users) for _, users in not_attending_reactions)
+        total_late = sum(len(users) for _, users in late_reactions)
+        
+        export_text += f"📈 **SUMMARY**\n"
+        export_text += f"✅ Attending: {total_attending}\n"
+        export_text += f"⏳ Late: {total_late}\n"
+        export_text += f"❌ Not Attending: {total_not_attending}\n"
+        export_text += f"👤 Event Creator: {message_author_name} (excluded from attending count)\n\n"
+        
+        # Add sections
+        if attending_reactions:
+            export_text += "✅ **ATTENDING**\n"
+            for reaction_name, users in attending_reactions:
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        if late_reactions:
+            export_text += "⏳ **LATE**\n"
+            for reaction_name, users in late_reactions:
+                filtered_users = [u for u in users if u != message_author_name]
+                if filtered_users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(filtered_users))}\n"
+            export_text += "\n"
+        
+        if not_attending_reactions:
+            export_text += "❌ **NOT ATTENDING**\n"
+            for reaction_name, users in not_attending_reactions:
+                if users:
+                    export_text += f"**{reaction_name}:** {', '.join(sorted(users))}\n"
+            export_text += "\n"
+        
+        # Send as file if too long, otherwise as message
+        if len(export_text) > 1900:
+            import io
+            file_name = f"attendance_{title.replace(' ', '_')}_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+            discord_file = discord.File(fp=io.BytesIO(export_text.encode('utf-8')), filename=file_name)
+            await interaction.followup.send("📊 **Attendance Export:**", file=discord_file, ephemeral=True)
+        else:
+            await interaction.followup.send(f"```\n{export_text}\n```", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error exporting attendance: {e}", ephemeral=True)
+
+async def handle_refresh_button(interaction: discord.Interaction, message_id: int):
+    """Handle refresh button click"""
+    try:
+        await interaction.response.defer()
+        
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        title, timestamp_str = extract_title_and_timestamp(message.content)
+        
+        # Refresh the summary
+        await post_or_edit_summary_and_get_thread(interaction.channel, message_id, title, timestamp_str)
+        
+        await interaction.followup.send("✅ Summary refreshed!", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error refreshing: {e}", ephemeral=True)
+
+async def handle_thread_button(interaction: discord.Interaction, message_id: int):
+    """Handle thread button click - show link to the reaction log thread"""
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        if message_id in summary_messages and message_id in summary_threads:
+            thread = summary_threads[message_id]
+            try:
+                await thread.fetch()  # Check if thread still exists
+                await interaction.followup.send(f"🧵 **Reaction Log Thread:** {thread.mention}", ephemeral=True)
+            except discord.NotFound:
+                await interaction.followup.send("❌ Thread not found. It may have been deleted or archived.", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ No thread found for this event. Threads are created when reactions are logged.", ephemeral=True)
+            
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error accessing thread: {e}", ephemeral=True)
+
+@bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     
@@ -837,6 +1009,160 @@ async def debug_emoji_detection(ctx, message_id: int):
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
+
+@bot.command(name="show_emoji_map")
+async def show_emoji_map(ctx):
+    """Display the current EMOJI_MAP configuration"""
+    embed = discord.Embed(title="🗺️ Current Emoji Map Configuration", color=0x00FFFF)
+    
+    if not EMOJI_MAP:
+        embed.description = "No emojis configured in EMOJI_MAP"
+        await ctx.send(embed=embed)
+        return
+    
+    # Show each emoji mapping
+    for emoji_id, (clean_name, color) in EMOJI_MAP.items():
+        # Try to reconstruct the emoji
+        try:
+            # Get the emoji from the guild
+            guild_emoji = discord.utils.get(ctx.guild.emojis, id=emoji_id)
+            if guild_emoji:
+                emoji_display = str(guild_emoji)
+                status = "✅ Found in server"
+            else:
+                emoji_display = f"<:unknown:{emoji_id}>"
+                status = "❌ Not found in server"
+        except:
+            emoji_display = f"<:unknown:{emoji_id}>"
+            status = "❌ Error"
+        
+        embed.add_field(
+            name=f"ID: {emoji_id}",
+            value=f"**Emoji:** {emoji_display}\n**Label:** {clean_name}\n**Status:** {status}",
+            inline=True
+        )
+    
+    # Add special unicode emojis info
+    embed.add_field(
+        name="Unicode Emojis",
+        value="⏳ Late\n🚫 Not attending (❌, :cross:)",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="test_emoji_in_server")
+async def test_emoji_in_server(ctx, emoji_id: int):
+    """Test if a specific emoji ID exists in the server"""
+    try:
+        guild_emoji = discord.utils.get(ctx.guild.emojis, id=emoji_id)
+        if guild_emoji:
+            embed = discord.Embed(title="✅ Emoji Found", color=0x00FF00)
+            embed.add_field(name="Name", value=guild_emoji.name, inline=True)
+            embed.add_field(name="ID", value=guild_emoji.id, inline=True)
+            embed.add_field(name="Animated", value=guild_emoji.animated, inline=True)
+            embed.add_field(name="Display", value=str(guild_emoji), inline=False)
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(f"❌ Emoji with ID {emoji_id} not found in this server.")
+    except Exception as e:
+        await ctx.send(f"❌ Error testing emoji: {e}")
+
+@bot.command(name="list_server_emojis")
+async def list_server_emojis(ctx, search: str = None):
+    """List all custom emojis available in the server"""
+    guild_emojis = ctx.guild.emojis
+    
+    if not guild_emojis:
+        await ctx.send("❌ No custom emojis found in this server.")
+        return
+    
+    # Filter by search term if provided
+    if search:
+        guild_emojis = [e for e in guild_emojis if search.lower() in e.name.lower()]
+        if not guild_emojis:
+            await ctx.send(f"❌ No emojis found matching '{search}'.")
+            return
+    
+    embed = discord.Embed(
+        title=f"🎭 Server Emojis{f' (filtered: {search})' if search else ''}",
+        color=0xFFD700
+    )
+    
+    # Group emojis to avoid hitting embed limits
+    emoji_text = ""
+    count = 0
+    
+    for emoji in guild_emojis[:20]:  # Limit to first 20 to avoid embed limits
+        emoji_text += f"{emoji} `:{emoji.name}:` (ID: {emoji.id})\n"
+        count += 1
+    
+    if count < len(guild_emojis):
+        emoji_text += f"\n... and {len(guild_emojis) - count} more emojis"
+    
+    embed.description = emoji_text
+    embed.set_footer(text=f"Total: {len(ctx.guild.emojis)} emojis in server")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="update_emoji_map")
+async def update_emoji_map(ctx, message_id: int):
+    """Generate updated EMOJI_MAP code based on a message's reactions"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        
+        if not message.reactions:
+            await ctx.send("❌ No reactions found on this message.")
+            return
+        
+        embed = discord.Embed(title="🔧 Updated EMOJI_MAP Code", color=0x00FF00)
+        
+        emoji_map_code = "EMOJI_MAP = {\n"
+        
+        for reaction in message.reactions:
+            if hasattr(reaction.emoji, 'id') and reaction.emoji.id:
+                # Custom emoji
+                emoji_name = reaction.emoji.name
+                emoji_id = reaction.emoji.id
+                
+                # Check if this emoji exists in current map
+                if emoji_id in EMOJI_MAP:
+                    current_label = EMOJI_MAP[emoji_id][0]
+                    emoji_map_code += f"    {emoji_id}: (\"{current_label}\", None),  # {emoji_name}\n"
+                else:
+                    # Generate a reasonable label based on emoji name
+                    suggested_label = emoji_name.replace('_', ' ').title()
+                    emoji_map_code += f"    {emoji_id}: (\"{suggested_label}\", None),  # NEW: {emoji_name}\n"
+            else:
+                # Unicode emoji - add as comment
+                emoji_str = str(reaction.emoji)
+                if emoji_str == "❌":
+                    emoji_map_code += f"    # Unicode ❌ handled by emoji_display_and_label function\n"
+                elif emoji_str == "⏳":
+                    emoji_map_code += f"    # Unicode ⏳ handled by emoji_display_and_label function\n"
+                else:
+                    emoji_map_code += f"    # Unicode {emoji_str} - add to emoji_display_and_label if needed\n"
+        
+        emoji_map_code += "}"
+        
+        # Send the code in a code block
+        if len(emoji_map_code) > 1900:
+            # Send as file if too long
+            import io
+            discord_file = discord.File(
+                fp=io.BytesIO(emoji_map_code.encode('utf-8')), 
+                filename="updated_emoji_map.py"
+            )
+            await ctx.send("🔧 **Updated EMOJI_MAP (file):**", file=discord_file)
+        else:
+            await ctx.send(f"```python\n{emoji_map_code}\n```")
+        
+        embed.description = "Copy this code and replace your current EMOJI_MAP in the bot code!"
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error generating emoji map: {e}")
 
 @bot.command(name="export_attendance")
 async def export_attendance(ctx, message_id: int):
