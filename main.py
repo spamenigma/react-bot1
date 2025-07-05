@@ -25,14 +25,14 @@ summary_threads = {}
 
 # Emoji ID mappings for wording and emoji display
 EMOJI_MAP = {
-    1025015433054662676: (":Carrier_Star_Wing: Carrier_Star_Wing", None),
-    718534017082720339: (":1_: 1_", None),
-    663133357592412181: (":greentick: Greentick", None),
-    1025067230347661412: (":Athena_Training_SQN: Athena_Training_Sqn", None),
-    663134181089607727: (":cross: Cross", None),
-    792085274149519420: (":pathfinders: Pathfinders", None),
-    1025067188102643853: (":Trident: Trident", None),
-    1091115981788684318: (":RenegadeLogov2: Renegadelogov2", None),
+    1025015433054662676: ("<:Carrier_Star_Wing:1025015433054662676> Carrier Star Wing", None),
+    718534017082720339: ("<:1_:718534017082720339> Squadron 1", None),
+    663133357592412181: ("<:greentick:663133357592412181> Attending", None),
+    1025067230347661412: ("<:Athena_Training_SQN:1025067230347661412> Athena Training", None),
+    663134181089607727: ("🚫 Not attending", None),
+    792085274149519420: ("<:pathfinders:792085274149519420> Pathfinders", None),
+    1025067188102643853: ("<:Trident:1025067188102643853> Trident", None),
+    1091115981788684318: ("<:RenegadeLogov2:1091115981788684318> Renegade", None),
     # Unicode: "⏳": ("⏳ Late", None),
 }
 
@@ -170,7 +170,8 @@ def emoji_display_and_label(emoji_obj):
     # Special case Late and Not attending emojis by name if needed here
     if name == "⏳":
         return "⏳ Late", None
-    if name == "❌" or name == ":cross~1:" or "cross" in name.lower():
+    if (name == "❌" or name == ":cross~1:" or "cross" in name.lower() or 
+        name == "<:cross:663134181089607727>" or ":cross:" in name):
         return "🚫 Not attending", None
     # For custom emojis, try to display them properly
     if hasattr(emoji_obj, 'name') and hasattr(emoji_obj, 'id') and emoji_obj.id:
@@ -192,12 +193,14 @@ def build_summary_embed(message_id, title, timestamp_str):
         )
         return embed
     
-    # Calculate total attendees (excluding "Not attending" and "Late")
-    total_attending = 0
+    # Calculate unique attendees (excluding "Not attending" and "Late")
+    unique_attendees = set()
     for emoji_key, users in emoji_data.items():
         label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
         if "Not attending" not in label and "Late" not in label:
-            total_attending += len(users)
+            unique_attendees.update(users)
+    
+    total_attending = len(unique_attendees)
     
     # Main embed with title and color
     embed = discord.Embed(
@@ -324,7 +327,7 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
 
     thread, created = await get_or_create_thread_for_summary(summary_message, title)
 
-    # Thread is created but no link message is posted
+    # Return thread without posting any link message
     return thread
 
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
