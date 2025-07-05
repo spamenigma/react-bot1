@@ -175,10 +175,14 @@ def emoji_display_and_label(emoji_obj):
         return "🚫 Not attending", None
     # For custom emojis, try to display them properly
     if hasattr(emoji_obj, 'name') and hasattr(emoji_obj, 'id') and emoji_obj.id:
-        # Custom emoji - use the emoji itself as display
+        # Custom emoji - use the emoji itself as display with a clean name
         emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
-        return f"{emoji_display} {emoji_obj.name.title()}", None
-    # Default label is emoji itself, no color
+        clean_name = emoji_obj.name.replace('_', ' ').title()
+        return f"{emoji_display} {clean_name}", None
+    # Default fallback - try to make a clean display
+    if name.startswith(':') and name.endswith(':'):
+        clean_name = name.strip(':').replace('_', ' ').title()
+        return f"{name} {clean_name}", None
     return name, None
 
 def build_summary_embed(message_id, title, timestamp_str):
@@ -301,7 +305,7 @@ async def get_or_create_thread_for_summary(summary_message: discord.Message, tit
     )
     summary_threads[summary_message.id] = thread
     
-    # Send an initial message in the thread
+    # Send an initial message in the thread (but don't link to it in main channel)
     try:
         await thread.send(f"🧵 **Reaction log for: {title}**\nAll reaction changes will be logged here.")
     except Exception as e:
@@ -658,6 +662,48 @@ async def clear_all_data(ctx, confirm: str = None):
         
     except Exception as e:
         await ctx.send(f"❌ Error during nuclear cleanup: {e}")
+
+@bot.command(name="debug_emoji_detection")
+async def debug_emoji_detection(ctx, message_id: int):
+    """Debug what emoji data we're actually getting from Discord"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        
+        embed = discord.Embed(title=f"Emoji Debug for Message {message_id}", color=0xFF0000)
+        
+        if message.reactions:
+            for reaction in message.reactions:
+                emoji = reaction.emoji
+                
+                # Get detailed emoji info
+                emoji_info = f"str(emoji): {str(emoji)}\n"
+                if hasattr(emoji, 'name'):
+                    emoji_info += f"emoji.name: {emoji.name}\n"
+                if hasattr(emoji, 'id'):
+                    emoji_info += f"emoji.id: {emoji.id}\n"
+                
+                # Test our label function
+                label, _ = emoji_display_and_label(emoji)
+                emoji_info += f"Our label: {label}\n"
+                
+                # Check if it's in our map
+                if hasattr(emoji, 'id') and emoji.id and emoji.id in EMOJI_MAP:
+                    emoji_info += f"Found in EMOJI_MAP: {EMOJI_MAP[emoji.id][0]}"
+                else:
+                    emoji_info += "NOT in EMOJI_MAP"
+                
+                embed.add_field(
+                    name=f"Reaction: {emoji}",
+                    value=f"```{emoji_info}```",
+                    inline=False
+                )
+        else:
+            embed.description = "No reactions found on this message."
+        
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
 
 @bot.command(name="test_status")
 async def test_status(ctx):
