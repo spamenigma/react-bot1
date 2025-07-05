@@ -430,31 +430,16 @@ def build_summary_embed(message_id, title, timestamp_str):
         )
         return embed
     
-    # Get the message author to exclude from display (but not from thread logs)
-    try:
-        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
-        original_message = None
-        if monitor_channel:
-            try:
-                original_message = monitor_channel.get_message(message_id)
-                if not original_message:
-                    # Try to fetch it
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    original_message = loop.run_until_complete(monitor_channel.fetch_message(message_id))
-            except:
-                pass
-        
-        message_author_name = original_message.author.name if original_message else None
-    except:
-        message_author_name = None
+    # For now, we can't easily get the message author in a sync function
+    # We'll handle author exclusion in the async calling function if needed
+    message_author_name = None
     
-    # Calculate unique attendees (excluding "Not attending", "Late", and message author)
+    # Calculate unique attendees (excluding "Not attending" and "Late")
     unique_attendees = set()
     for emoji_key, users in emoji_data.items():
         label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
         if "Not attending" not in label and "Late" not in label:
-            # Exclude message author from count
+            # Exclude message author from count if we know who it is
             filtered_users = users.copy()
             if message_author_name and message_author_name in filtered_users:
                 filtered_users.remove(message_author_name)
@@ -494,8 +479,9 @@ def build_summary_embed(message_id, title, timestamp_str):
     
     # Add attending reactions first
     for emoji_key, users, label in attending_reactions:
-        # Filter out message author for display
+        # Filter out message author for display (we'll improve this later)
         filtered_users = users.copy()
+        # Note: message_author_name is None for now, but we keep the logic
         if message_author_name and message_author_name in filtered_users:
             filtered_users.remove(message_author_name)
         
