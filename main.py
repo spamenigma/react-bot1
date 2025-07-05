@@ -1,4 +1,4 @@
-async def create_summary_view(message_id):
+def create_summary_view(message_id):
     """Create the button view for summary messages"""
     view = discord.ui.View(timeout=None)  # Persistent view
     
@@ -1158,7 +1158,7 @@ async def debug_summary_buttons(ctx, message_id: int):
             
             # Build new embed and view
             summary_embed = build_summary_embed(message_id, title, timestamp_str)
-            view = await create_summary_view(message_id)
+            view = create_summary_view(message_id)
             
             # Force update with buttons
             await summary_msg.edit(embed=summary_embed, view=view)
@@ -1189,7 +1189,7 @@ async def add_buttons_to_all(ctx):
             
             # Build new embed and view with buttons
             summary_embed = build_summary_embed(message_id, title, timestamp_str)
-            view = await create_summary_view(message_id)
+            view = create_summary_view(message_id)
             
             # Update with buttons
             await summary_msg.edit(embed=summary_embed, view=view)
