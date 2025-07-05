@@ -44,6 +44,77 @@ PING_RE = re.compile(r"^<@!?(\d+)>$")  # Match user mentions
 ROLE_MENTION_RE = re.compile(r"^<@&(\d+)>$")  # Match role mentions
 MIXED_MENTIONS_RE = re.compile(r"^(<@[!&]?\d+>\s*)+$")  # Match lines with only mentions
 
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    
+    # Sync reactions from recent messages on startup
+    await sync_recent_reactions()
+
+async def sync_recent_reactions(limit=10):
+    """
+    Sync reactions from the last N messages in the monitor channel.
+    This rebuilds our reaction tracking from Discord's actual data.
+    """
+    print(f"Syncing reactions from last {limit} messages...")
+    
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        if not monitor_channel:
+            print("Monitor channel not found!")
+            return
+        
+        log_channel = bot.get_channel(LOG_CHANNEL_ID)
+        if not log_channel:
+            print("Log channel not found!")
+            return
+        
+        # Clear existing data
+        reaction_signups.clear()
+        summary_messages.clear()
+        summary_threads.clear()
+        
+        # Get recent messages
+        messages = []
+        async for message in monitor_channel.history(limit=limit):
+            if message.reactions:  # Only process messages with reactions
+                messages.append(message)
+        
+        print(f"Found {len(messages)} messages with reactions")
+        
+        # Process each message's reactions
+        for message in messages:
+            print(f"Processing message {message.id}...")
+            
+            for reaction in message.reactions:
+                emoji_str = str(reaction.emoji)
+                
+                # Get all users who reacted (excluding bots)
+                async for user in reaction.users():
+                    if not user.bot:
+                        reaction_signups[message.id][emoji_str].add(user.name)
+                        print(f"  Added {user.name} to {emoji_str}")
+        
+        print("Reaction sync completed!")
+        
+        # Create/update summaries for all synced messages
+        await create_summaries_for_synced_messages(messages, log_channel)
+        
+    except Exception as e:
+        print(f"Error during reaction sync: {e}")
+
+async def create_summaries_for_synced_messages(messages, log_channel):
+    """Create or update summary messages for all synced messages"""
+    try:
+        for message in messages:
+            if message.id in reaction_signups:
+                title, timestamp_str = extract_title_and_timestamp(message.content)
+                await post_or_edit_summary_and_get_thread(log_channel, message.id, title, timestamp_str)
+                print(f"Created/updated summary for: {title}")
+    
+    except Exception as e:
+        print(f"Error creating summaries: {e}")
+
 def extract_title_and_timestamp(content: str):
     """
     Extract title and timestamp from message content.
@@ -336,6 +407,17 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     except Exception as e:
         print(f"Failed to send remove log in thread: {e}")
 
+@bot.command(name="sync_reactions")
+async def manual_sync_reactions(ctx, limit: int = 10):
+    """Manually sync reactions from recent messages"""
+    if ctx.channel.id != LOG_CHANNEL_ID:
+        await ctx.send("This command can only be used in the log channel.")
+        return
+    
+    await ctx.send(f"🔄 Syncing reactions from last {limit} messages...")
+    await sync_recent_reactions(limit)
+    await ctx.send("✅ Reaction sync completed!")
+
 @bot.command(name="debug_reactions")
 async def debug_reactions(ctx, message_id: int):
     """Debug command to see current reaction data for a message"""
@@ -397,6 +479,55 @@ async def show_current_reactions(ctx, message_id: int):
             embed.description = "No reactions found on this message."
         
         await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
+
+@bot.command(name="get_emoji_map")
+async def get_emoji_map(ctx, message_id: int):
+    """Generate a proper EMOJI_MAP from a message's reactions"""
+    try:
+        monitor_channel = bot.get_channel(MONITOR_CHANNEL_ID)
+        message = await monitor_channel.fetch_message(message_id)
+        
+        if not message.reactions:
+            await ctx.send("No reactions found on this message.")
+            return
+        
+        emoji_map_code = "EMOJI_MAP = {\n"
+        
+        for reaction in message.reactions:
+            if hasattr(reaction.emoji, 'id') and reaction.emoji.id:
+                # Custom emoji
+                emoji_name = reaction.emoji.name
+                emoji_id = reaction.emoji.id
+                emoji_display = f"<:{emoji_name}:{emoji_id}>"
+                
+                # Generate a reasonable label based on emoji name
+                label = f"{emoji_display} {emoji_name.title()}"
+                
+                emoji_map_code += f"    {emoji_id}: (\"{label}\", None),\n"
+            else:
+                # Unicode emoji
+                emoji_str = str(reaction.emoji)
+                
+                # Try to give it a meaningful name
+                if emoji_str == "❌":
+                    label = "🚫 Not attending"
+                elif emoji_str == "⏳":
+                    label = "⏳ Late"
+                elif emoji_str == "✅":
+                    label = "✅ Attending"
+                else:
+                    label = f"{emoji_str} React"
+                
+                emoji_map_code += f"    # Unicode: \"{emoji_str}\": (\"{label}\", None),\n"
+        
+        emoji_map_code += "}"
+        
+        # Send as code block
+        await ctx.send(f"```python\n{emoji_map_code}\n```")
+        await ctx.send("Copy this code and replace your current EMOJI_MAP!")
+        
     except Exception as e:
         await ctx.send(f"❌ Error: {e}")
 
