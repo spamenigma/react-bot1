@@ -38,23 +38,54 @@ EMOJI_MAP = {
 LATE_EMOJI_IDS = {123456789012345678}  # Replace with actual Late emoji IDs
 NOT_ATTENDING_IDS = {663134181089607727}  # Replace with actual cross emoji IDs
 
+# Updated regex patterns
 TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")  # Match Discord :F timestamps
-PING_RE = re.compile(r"^<@!?(\d+)>$")
+PING_RE = re.compile(r"^<@!?(\d+)>$")  # Match user mentions
+ROLE_MENTION_RE = re.compile(r"^<@&(\d+)>$")  # Match role mentions
+MIXED_MENTIONS_RE = re.compile(r"^(<@[!&]?\d+>\s*)+$")  # Match lines with only mentions
 
 def extract_title_and_timestamp(content: str):
+    """
+    Extract title and timestamp from message content.
+    Skip lines that contain only mentions (user or role pings).
+    """
     lines = [line.strip() for line in content.splitlines() if line.strip()]
-    # Skip first line if it’s a ping (@)
-    if lines and PING_RE.match(lines[0]):
-        lines = lines[1:]
-    title = lines[0] if lines else "Sign-Ups"
+    
+    if not lines:
+        return "Sign-Ups", ""
+    
+    title = None
+    
+    # Find the first line that isn't just mentions
+    for line in lines:
+        # Skip lines that are only mentions (users or roles)
+        if MIXED_MENTIONS_RE.match(line):
+            continue
+        
+        # Skip lines that are just a single user mention
+        if PING_RE.match(line):
+            continue
+            
+        # Skip lines that are just a single role mention
+        if ROLE_MENTION_RE.match(line):
+            continue
+        
+        # This line has actual content, use it as title
+        title = line
+        break
+    
+    # Fallback if no suitable title found
+    if not title:
+        title = "Sign-Ups"
+    
+    # Extract timestamp
     timestamp_str = ""
-
-    # Try to find first :F timestamp anywhere in content
     match = TIMESTAMP_F_RE.search(content)
     if match:
         ts = int(match.group(1))
         dt = datetime.utcfromtimestamp(ts)
         timestamp_str = dt.strftime("%A, %d %B %Y %H:%M UTC")
+    
     return title, timestamp_str
 
 def emoji_display_and_label(emoji_obj):
@@ -72,32 +103,106 @@ def emoji_display_and_label(emoji_obj):
     # Default label is emoji itself, no color
     return name, None
 
-def build_summary_text(message_id, title, timestamp_str):
+def build_summary_embed(message_id, title, timestamp_str):
+    """Build a rich embed with names listed one per line under each reaction"""
     emoji_data = reaction_signups[message_id]
+    
     if not emoji_data:
-        return "📋 No sign-ups yet."
-
-    lines = []
-    header = f"📋 Sign-Ups for {title}"
+        embed = discord.Embed(
+            title="📋 No sign-ups yet", 
+            description="Be the first to react!",
+            color=0x808080  # Gray color
+        )
+        return embed
+    
+    # Calculate total attendees (excluding "Not attending" and "Late")
+    total_attending = 0
+    for emoji_key, users in emoji_data.items():
+        label, _ = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
+        if "Not attending" not in label and "Late" not in label:
+            total_attending += len(users)
+    
+    # Main embed with title and color
+    embed = discord.Embed(
+        title=f"📋 {title}",
+        description=f"**{total_attending}** total attending",
+        color=0x00FF00  # Green for active event
+    )
+    
+    # Add timestamp if available
     if timestamp_str:
-        header += f" {timestamp_str}"
-    lines.append(header)
-
+        embed.add_field(
+            name="⏰ Event Time", 
+            value=f"```{timestamp_str}```", 
+            inline=False
+        )
+    
+    # Sort reactions to show attending first, then others
+    attending_reactions = []
+    other_reactions = []
+    
     for emoji_key, users in emoji_data.items():
         if not users:
             continue
+            
         label, color = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
-        count = len(users)
-        # Format line, for "Late" show differently
-        if "Late" in label:
-            line = f"{count} Late: {', '.join(sorted(users))}"
-        elif "Not attending" in label:
-            line = f"{count} Not attending: {', '.join(sorted(users))}"
+        
+        if "Not attending" in label or "Late" in label:
+            other_reactions.append((emoji_key, users, label))
         else:
-            line = f"{count} {label} attending: {', '.join(sorted(users))}"
-        lines.append(line)
-
-    return "\n".join(lines)
+            attending_reactions.append((emoji_key, users, label))
+    
+    # Add attending reactions first
+    for emoji_key, users, label in attending_reactions:
+        count = len(users)
+        
+        # Create field name with count
+        field_name = f"{label} ({count})"
+        
+        # Create value with names one per line
+        if users:
+            user_list = "\n".join([f"• {user}" for user in sorted(users)])
+        else:
+            user_list = "None"
+        
+        # Discord field value limit is 1024 characters
+        if len(user_list) > 1024:
+            # Truncate and add indication
+            user_list = user_list[:1020] + "..."
+        
+        embed.add_field(
+            name=field_name,
+            value=user_list,
+            inline=True  # Allow multiple columns if they fit
+        )
+    
+    # Add other reactions (Late, Not attending)
+    for emoji_key, users, label in other_reactions:
+        count = len(users)
+        
+        # Create field name with count
+        field_name = f"{label} ({count})"
+        
+        # Create value with names one per line
+        if users:
+            user_list = "\n".join([f"• {user}" for user in sorted(users)])
+        else:
+            user_list = "None"
+        
+        # Discord field value limit is 1024 characters
+        if len(user_list) > 1024:
+            user_list = user_list[:1020] + "..."
+        
+        embed.add_field(
+            name=field_name,
+            value=user_list,
+            inline=True
+        )
+    
+    # Add footer with last updated time
+    embed.set_footer(text=f"Last updated: {datetime.utcnow().strftime('%H:%M UTC')}")
+    
+    return embed
 
 async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str):
     try:
@@ -118,18 +223,19 @@ async def get_or_create_thread_for_summary(summary_message: discord.Message, tit
     return thread, True
 
 async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, timestamp_str):
-    summary_text = build_summary_text(message_id, title, timestamp_str)
+    # Build embed instead of text
+    summary_embed = build_summary_embed(message_id, title, timestamp_str)
     summary_message = None
 
     if message_id in summary_messages:
         try:
             summary_message = summary_messages[message_id]
-            await summary_message.edit(content=summary_text)
+            await summary_message.edit(embed=summary_embed)
         except discord.NotFound:
             summary_messages.pop(message_id, None)
 
     if summary_message is None:
-        summary_message = await log_channel.send(summary_text)
+        summary_message = await log_channel.send(embed=summary_embed)
         summary_messages[message_id] = summary_message
 
     thread, created = await get_or_create_thread_for_summary(summary_message, title)
