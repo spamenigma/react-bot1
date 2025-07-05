@@ -25,64 +25,51 @@ summary_threads = {}
 
 # Emoji ID mappings for wording and emoji display
 EMOJI_MAP = {
-    718534017082720339: ("Support", 0xFFA500),
-    1025015433054662676: ("CSW", 0xADD8E6),
-    1091115981788684318: ("Renegade", 0x00FF00),
-    1025067188102643853: ("Trident", 0x0000FF),
-    1025067230347661412: ("Athena", 0x800080),
-    792085274149519420: ("Pathfinder", None),
-    663134181089607727: ("Not attending", None),
-    123456789012345678: ("Late", None),
+    718534017082720339: ("🧡 Support", 0xFFA500),               # Support orange
+    1025015433054662676: ("💙 CSW", 0xADD8E6),                 # CSW light blue
+    1091115981788684318: ("💚 Renegade", 0x00FF00),
+    1025067188102643853: ("💙 Trident", 0x0000FF),             # Trident blue
+    1025067230347661412: ("💜 Athena", 0x800080),
+    792085274149519420: ("🏹 Pathfinder", None),               # Use emoji, no color
+    663134181089607727: ("🚫 Not attending", None),            # Cross emoji ID
+    123456789012345678: ("⏳ Late", None),                      # Placeholder Late emoji ID
 }
 
-TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")
+LATE_EMOJI_IDS = {123456789012345678}  # Replace with actual Late emoji IDs
+NOT_ATTENDING_IDS = {663134181089607727}  # Replace with actual cross emoji IDs
 
-# NEW: Regex to match ANY form of mention/ping (Discord formatted or literal @/#)
-# when checking if an ENTIRE line should be skipped.
-FULL_LINE_MENTION_RE = re.compile(r"^(?:<[@#]!?\d+>|@[a-zA-Z0-9_]+|#[a-zA-Z0-9_]+)\s*$", re.IGNORECASE)
-
-# NEW: Regex to match ONLY Discord's internal mention format for cleaning within a string.
-# This prevents removing literal '@' if it's part of a phrase like "attend @ the park"
-DISCORD_FORMAT_MENTION_RE = re.compile(r"<[@#]!?(\d+)>")
+TIMESTAMP_F_RE = re.compile(r"<t:(\d+):F>")  # Match Discord :F timestamps
+PING_RE = re.compile(r"^<@!?(\d+)>$")
 
 def extract_title_and_timestamp(content: str):
     lines = [line.strip() for line in content.splitlines() if line.strip()]
-    
-    title_line_index = 0
-    while title_line_index < len(lines):
-        current_line = lines[title_line_index]
-        # Use FULL_LINE_MENTION_RE to check if the entire line is a mention/ping
-        if FULL_LINE_MENTION_RE.fullmatch(current_line):
-            title_line_index += 1
-        else:
-            break # Found a suitable title line
-
-    title = "Sign-Ups" # Default title if no suitable line is found
-    if title_line_index < len(lines):
-        # Use DISCORD_FORMAT_MENTION_RE to remove only Discord's internal mention formats
-        # from the chosen title line, leaving literal '@' or '#' if they are not part of a mention
-        title = DISCORD_FORMAT_MENTION_RE.sub("", lines[title_line_index]).strip()
-        # If after removing mentions, the line is empty, default to "Sign-Ups"
-        if not title:
-            title = "Sign-Ups"
-    
+    # Skip first line if it’s a ping (@)
+    if lines and PING_RE.match(lines[0]):
+        lines = lines[1:]
+    title = lines[0] if lines else "Sign-Ups"
     timestamp_str = ""
+
+    # Try to find first :F timestamp anywhere in content
     match = TIMESTAMP_F_RE.search(content)
     if match:
         ts = int(match.group(1))
-        dt = datetime.fromtimestamp(ts)
+        dt = datetime.utcfromtimestamp(ts)
         timestamp_str = dt.strftime("%A, %d %B %Y %H:%M UTC")
     return title, timestamp_str
 
 def emoji_display_and_label(emoji_obj):
+    # Match by ID first if possible
     if hasattr(emoji_obj, "id") and emoji_obj.id in EMOJI_MAP:
         label, color = EMOJI_MAP[emoji_obj.id]
         return label, color
+    # Fall back to unicode or name string
     name = str(emoji_obj)
+    # Special case Late and Not attending emojis by name if needed here
     if name == "⏳":
-        return "Late", None
-    if name == "❌" or name == "🚫":
-        return "Not attending", None
+        return "⏳ Late", None
+    if name == "❌" or name == ":cross~1:":
+        return "🚫 Not attending", None
+    # Default label is emoji itself, no color
     return name, None
 
 def build_summary_text(message_id, title, timestamp_str):
@@ -91,44 +78,40 @@ def build_summary_text(message_id, title, timestamp_str):
         return "📋 No sign-ups yet."
 
     lines = []
-    # No explicit replace('@', '') needed now as title should already be clean
-    header = f"📋 **Sign-Ups for: {title}**"
+    header = f"📋 Sign-Ups for {title}"
     if timestamp_str:
-        header += f"\n**When:** {timestamp_str}"
+        header += f" {timestamp_str}"
     lines.append(header)
-    lines.append("-" * 30)
 
-    for emoji_key, users in sorted(emoji_data.items()):
+    for emoji_key, users in emoji_data.items():
         if not users:
             continue
-            
         label, color = emoji_display_and_label(discord.PartialEmoji.from_str(emoji_key))
         count = len(users)
-        user_mentions = ', '.join(sorted(users))
-
-        if label in ("Late", "Not attending"):
-            header_line = f"{emoji_key} {count} {label}:"
+        # Format line, for "Late" show differently
+        if "Late" in label:
+            line = f"{count} Late: {', '.join(sorted(users))}"
+        elif "Not attending" in label:
+            line = f"{count} Not attending: {', '.join(sorted(users))}"
         else:
-            header_line = f"{emoji_key} {count} {label} attending:"
-            
-        lines.append(header_line)
-        lines.append(f"> {user_mentions}")
-        lines.append("")
+            line = f"{count} {label} attending: {', '.join(sorted(users))}"
+        lines.append(line)
 
     return "\n".join(lines)
-
 
 async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str):
     try:
         if summary_message.id in summary_threads:
             thread = summary_threads[summary_message.id]
-            await bot.fetch_channel(thread.id)
+            # Confirm thread still exists
+            await thread.fetch()
             return thread, False
     except (discord.NotFound, AttributeError):
         summary_threads.pop(summary_message.id, None)
 
+    # Create new thread if missing or invalid
     thread = await summary_message.create_thread(
-        name=f"Logs for {title}",
+        name=f"Reactions for {title}",
         auto_archive_duration=1440
     )
     summary_threads[summary_message.id] = thread
@@ -150,30 +133,42 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
         summary_messages[message_id] = summary_message
 
     thread, created = await get_or_create_thread_for_summary(summary_message, title)
+
+    # If just created, post a link message in logs channel
+    if created:
+        try:
+            link_msg = await log_channel.send(f"Created thread for {title} → {thread.mention}")
+            # Optionally store or pin link_msg if needed
+        except Exception as e:
+            print(f"Failed to send thread link message: {e}")
+
     return thread
 
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    return f"[`{time_str}`] **{user.display_name}** {action} reaction {emoji}"
+    return f"[{time_str}] {user} {action} reaction {emoji}"
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.channel_id != MONITOR_CHANNEL_ID or payload.member.bot:
+    if payload.channel_id != MONITOR_CHANNEL_ID:
         return
     guild = bot.get_guild(payload.guild_id)
-    if not guild: return
+    if not guild:
+        return
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    if not log_channel: return
+    if not log_channel:
+        return
     try:
         monitor_channel = guild.get_channel(payload.channel_id)
         message = await monitor_channel.fetch_message(payload.message_id)
-    except Exception as e:
-        print(f"Failed to fetch message on reaction add: {e}")
+    except Exception:
         return
 
-    user = payload.member
+    user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
     emoji_str = str(payload.emoji)
-    reaction_signups[payload.message_id][emoji_str].add(user.display_name)
+
+    # Track sign-up
+    reaction_signups[payload.message_id][emoji_str].add(user.name)
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
     thread = await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
@@ -188,24 +183,23 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
     if payload.channel_id != MONITOR_CHANNEL_ID:
         return
     guild = bot.get_guild(payload.guild_id)
-    if not guild: return
+    if not guild:
+        return
     log_channel = guild.get_channel(LOG_CHANNEL_ID)
-    if not log_channel: return
+    if not log_channel:
+        return
     try:
         monitor_channel = guild.get_channel(payload.channel_id)
         message = await monitor_channel.fetch_message(payload.message_id)
-    except Exception as e:
-        print(f"Failed to fetch message on reaction remove: {e}")
+    except Exception:
         return
 
     user = guild.get_member(payload.user_id) or await bot.fetch_user(payload.user_id)
-    if not user or user.bot:
-        return
-
     emoji_str = str(payload.emoji)
-    
-    if user.display_name in reaction_signups[payload.message_id][emoji_str]:
-        reaction_signups[payload.message_id][emoji_str].remove(user.display_name)
+
+    # Remove sign-up
+    if user.name in reaction_signups[payload.message_id][emoji_str]:
+        reaction_signups[payload.message_id][emoji_str].remove(user.name)
         if not reaction_signups[payload.message_id][emoji_str]:
             del reaction_signups[payload.message_id][emoji_str]
 
