@@ -25,14 +25,14 @@ summary_threads = {}
 
 # Emoji ID mappings for wording and emoji display
 EMOJI_MAP = {
-    1025015433054662676: ("<:Carrier_Star_Wing:1025015433054662676> Carrier Star Wing", None),
-    718534017082720339: ("<:1_:718534017082720339> Squadron 1", None),
-    663133357592412181: ("<:greentick:663133357592412181> Attending", None),
-    1025067230347661412: ("<:Athena_Training_SQN:1025067230347661412> Athena Training", None),
-    663134181089607727: ("🚫 Not attending", None),
-    792085274149519420: ("<:pathfinders:792085274149519420> Pathfinders", None),
-    1025067188102643853: ("<:Trident:1025067188102643853> Trident", None),
-    1091115981788684318: ("<:RenegadeLogov2:1091115981788684318> Renegade", None),
+    1025015433054662676: ("Carrier Star Wing", None),
+    718534017082720339: ("Squadron 1", None),
+    663133357592412181: ("Attending", None),
+    1025067230347661412: ("Athena Training", None),
+    663134181089607727: ("Not attending", None),
+    792085274149519420: ("Pathfinders", None),
+    1025067188102643853: ("Trident", None),
+    1091115981788684318: ("Renegade", None),
     # Unicode: "⏳": ("⏳ Late", None),
 }
 
@@ -163,8 +163,11 @@ def extract_title_and_timestamp(content: str):
 def emoji_display_and_label(emoji_obj):
     # Match by ID first if possible
     if hasattr(emoji_obj, "id") and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
-        label, color = EMOJI_MAP[emoji_obj.id]
-        return label, color
+        clean_name, color = EMOJI_MAP[emoji_obj.id]
+        # Create the actual emoji display for Discord
+        emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
+        return f"{emoji_display} {clean_name}", color
+    
     # Fall back to unicode or name string
     name = str(emoji_obj)
     # Special case Late and Not attending emojis by name if needed here
@@ -173,12 +176,14 @@ def emoji_display_and_label(emoji_obj):
     if (name == "❌" or name == ":cross~1:" or "cross" in name.lower() or 
         name == "<:cross:663134181089607727>" or ":cross:" in name):
         return "🚫 Not attending", None
-    # For custom emojis, try to display them properly
+    
+    # For custom emojis not in our map, try to display them properly
     if hasattr(emoji_obj, 'name') and hasattr(emoji_obj, 'id') and emoji_obj.id:
         # Custom emoji - use the emoji itself as display with a clean name
         emoji_display = f"<:{emoji_obj.name}:{emoji_obj.id}>"
         clean_name = emoji_obj.name.replace('_', ' ').title()
         return f"{emoji_display} {clean_name}", None
+    
     # Default fallback - try to make a clean display
     if name.startswith(':') and name.endswith(':'):
         clean_name = name.strip(':').replace('_', ' ').title()
@@ -240,38 +245,66 @@ def build_summary_embed(message_id, title, timestamp_str):
     for emoji_key, users, label in attending_reactions:
         count = len(users)
         
-        # Create field name with count
-        field_name = f"{label} ({count})"
+        # Get clean name from EMOJI_MAP or create one
+        try:
+            emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+            if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                clean_name = EMOJI_MAP[emoji_obj.id][0]
+            else:
+                clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+            
+            # Put emoji in the value instead of field name
+            field_name = f"{clean_name} ({count})"
+            emoji_display = f"{emoji_obj}" if emoji_obj else emoji_key
+            
+        except:
+            field_name = f"{label} ({count})"
+            emoji_display = emoji_key
         
-        # Create value with names one per line
+        # Create value with emoji and names
         if users:
-            user_list = "\n".join([f"• {user}" for user in sorted(users)])
+            user_list = f"{emoji_display}\n" + "\n".join([f"• {user}" for user in sorted(users)])
         else:
-            user_list = "None"
+            user_list = f"{emoji_display}\nNone"
         
         # Discord field value limit is 1024 characters
         if len(user_list) > 1024:
-            # Truncate and add indication
             user_list = user_list[:1020] + "..."
         
         embed.add_field(
             name=field_name,
             value=user_list,
-            inline=True  # Allow multiple columns if they fit
+            inline=True
         )
     
     # Add other reactions (Late, Not attending)
     for emoji_key, users, label in other_reactions:
         count = len(users)
         
-        # Create field name with count
-        field_name = f"{label} ({count})"
+        # Get clean name from EMOJI_MAP or create one
+        try:
+            emoji_obj = discord.PartialEmoji.from_str(emoji_key)
+            if hasattr(emoji_obj, 'id') and emoji_obj.id and emoji_obj.id in EMOJI_MAP:
+                clean_name = EMOJI_MAP[emoji_obj.id][0]
+            elif "Not attending" in label:
+                clean_name = "Not attending"
+            elif "Late" in label:
+                clean_name = "Late"
+            else:
+                clean_name = emoji_obj.name.replace('_', ' ').title() if hasattr(emoji_obj, 'name') else "Unknown"
+            
+            field_name = f"{clean_name} ({count})"
+            emoji_display = f"{emoji_obj}" if emoji_obj else emoji_key
+            
+        except:
+            field_name = f"{label} ({count})"
+            emoji_display = emoji_key
         
-        # Create value with names one per line
+        # Create value with emoji and names
         if users:
-            user_list = "\n".join([f"• {user}" for user in sorted(users)])
+            user_list = f"{emoji_display}\n" + "\n".join([f"• {user}" for user in sorted(users)])
         else:
-            user_list = "None"
+            user_list = f"{emoji_display}\nNone"
         
         # Discord field value limit is 1024 characters
         if len(user_list) > 1024:
@@ -288,7 +321,7 @@ def build_summary_embed(message_id, title, timestamp_str):
     
     return embed
 
-async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str):
+async def get_or_create_thread_for_summary(summary_message: discord.Message, title: str, send_initial_log=False):
     try:
         if summary_message.id in summary_threads:
             thread = summary_threads[summary_message.id]
@@ -298,18 +331,19 @@ async def get_or_create_thread_for_summary(summary_message: discord.Message, tit
     except (discord.NotFound, AttributeError):
         summary_threads.pop(summary_message.id, None)
 
-    # Create new thread if missing or invalid
+    # Create new thread if missing or invalid - this creates it silently
     thread = await summary_message.create_thread(
         name=f"Reactions for {title}",
         auto_archive_duration=1440
     )
     summary_threads[summary_message.id] = thread
     
-    # Send an initial message in the thread (but don't link to it in main channel)
-    try:
-        await thread.send(f"🧵 **Reaction log for: {title}**\nAll reaction changes will be logged here.")
-    except Exception as e:
-        print(f"Failed to send initial thread message: {e}")
+    # Only send initial message if specifically requested (when logging reactions)
+    if send_initial_log:
+        try:
+            await thread.send(f"🧵 **Reaction log for: {title}**\nAll reaction changes will be logged here.")
+        except Exception as e:
+            print(f"Failed to send initial thread message: {e}")
     
     return thread, True
 
@@ -329,10 +363,11 @@ async def post_or_edit_summary_and_get_thread(log_channel, message_id, title, ti
         summary_message = await log_channel.send(embed=summary_embed)
         summary_messages[message_id] = summary_message
 
-    thread, created = await get_or_create_thread_for_summary(summary_message, title)
+    # DON'T create thread here - only create when actually needed for logging
+    # thread, created = await get_or_create_thread_for_summary(summary_message, title)
 
-    # Return thread without posting any link message
-    return thread
+    # Return None for thread since we're not creating it yet
+    return None
 
 def log_line(user: discord.User, emoji: discord.PartialEmoji, action: str):
     time_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -368,12 +403,18 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     reaction_signups[payload.message_id][emoji_str].add(user.name)
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
-    thread = await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
+    # Update summary but don't get thread yet
+    await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    try:
-        await thread.send(log_line(user, payload.emoji, "added"))
-    except Exception as e:
-        print(f"Failed to send add log in thread: {e}")
+    # Now get/create thread only for logging the reaction change
+    if payload.message_id in summary_messages:
+        summary_message = summary_messages[payload.message_id]
+        thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
+        
+        try:
+            await thread.send(log_line(user, payload.emoji, "added"))
+        except Exception as e:
+            print(f"Failed to send add log in thread: {e}")
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
@@ -401,12 +442,18 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
             del reaction_signups[payload.message_id][emoji_str]
 
     title, timestamp_str = extract_title_and_timestamp(message.content)
-    thread = await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
+    # Update summary but don't get thread yet
+    await post_or_edit_summary_and_get_thread(log_channel, payload.message_id, title, timestamp_str)
 
-    try:
-        await thread.send(log_line(user, payload.emoji, "removed"))
-    except Exception as e:
-        print(f"Failed to send remove log in thread: {e}")
+    # Now get/create thread only for logging the reaction change
+    if payload.message_id in summary_messages:
+        summary_message = summary_messages[payload.message_id]
+        thread, created = await get_or_create_thread_for_summary(summary_message, title, send_initial_log=created)
+        
+        try:
+            await thread.send(log_line(user, payload.emoji, "removed"))
+        except Exception as e:
+            print(f"Failed to send remove log in thread: {e}")
 
 @bot.command(name="sync_reactions")
 async def manual_sync_reactions(ctx, limit: int = 10):
